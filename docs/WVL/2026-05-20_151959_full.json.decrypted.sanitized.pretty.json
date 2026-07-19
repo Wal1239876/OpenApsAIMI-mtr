@@ -1,0 +1,1788 @@
+{
+  "AIMI_UAM_CONFIDENCE": "0.5",
+  "AUTOMATION_EVENTS": [
+    {
+      "id": "cac01f86-a8a9-4f24-b6b9-58adfd82216b",
+      "title": "Low",
+      "enabled": true,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": false,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[\"{\\\"type\\\":\\\"TriggerBg\\\",\\\"data\\\":{\\\"bg\\\":4,\\\"comparator\\\":\\\"IS_LESSER\\\",\\\"units\\\":\\\"mmol\\\"}}\",\"{\\\"type\\\":\\\"TriggerDelta\\\",\\\"data\\\":{\\\"value\\\":-0.1,\\\"units\\\":\\\"mmol\\\",\\\"deltaType\\\":\\\"DELTA\\\",\\\"comparator\\\":\\\"IS_LESSER\\\"}}\"]}}",
+      "actions": [
+        "{\"type\":\"ActionStartTempTarget\",\"data\":{\"value\":7.999999999999993,\"units\":\"mmol\",\"durationInMinutes\":90}}",
+        "{\"type\":\"ActionAlarm\",\"data\":{\"text\":\"\"}}"
+      ]
+    },
+    {
+      "id": "7a121e27-b517-4d93-9ee8-2b6bb1aba1a2",
+      "title": "TT eating soon",
+      "enabled": false,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": false,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"OR\",\"triggerList\":[\"{\\\"type\\\":\\\"TriggerRecurringTime\\\",\\\"data\\\":{\\\"time\\\":390,\\\"MONDAY\\\":true,\\\"TUESDAY\\\":true,\\\"WEDNESDAY\\\":true,\\\"THURSDAY\\\":true,\\\"FRIDAY\\\":true,\\\"SATURDAY\\\":true,\\\"SUNDAY\\\":true}}\",\"{\\\"type\\\":\\\"TriggerRecurringTime\\\",\\\"data\\\":{\\\"time\\\":690,\\\"MONDAY\\\":true,\\\"TUESDAY\\\":true,\\\"WEDNESDAY\\\":true,\\\"THURSDAY\\\":true,\\\"FRIDAY\\\":true,\\\"SATURDAY\\\":true,\\\"SUNDAY\\\":true}}\",\"{\\\"type\\\":\\\"TriggerRecurringTime\\\",\\\"data\\\":{\\\"time\\\":990,\\\"MONDAY\\\":false,\\\"TUESDAY\\\":false,\\\"WEDNESDAY\\\":true,\\\"THURSDAY\\\":false,\\\"FRIDAY\\\":false,\\\"SATURDAY\\\":true,\\\"SUNDAY\\\":true}}\"]}}",
+      "actions": [
+        "{\"type\":\"ActionStartTempTarget\",\"data\":{\"value\":4.500000000000005,\"units\":\"mmol\",\"durationInMinutes\":90}}"
+      ]
+    },
+    {
+      "id": "e0e01b0a-7faa-4f14-86de-690022532fef",
+      "title": "feet on the floor ",
+      "enabled": false,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": false,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[\"{\\\"type\\\":\\\"TriggerDelta\\\",\\\"data\\\":{\\\"value\\\":0.4,\\\"units\\\":\\\"mmol\\\",\\\"deltaType\\\":\\\"DELTA\\\",\\\"comparator\\\":\\\"IS_EQUAL_OR_GREATER\\\"}}\",\"{\\\"type\\\":\\\"TriggerCOB\\\",\\\"data\\\":{\\\"carbs\\\":0,\\\"comparator\\\":\\\"IS_EQUAL\\\"}}\",\"{\\\"type\\\":\\\"TriggerTimeRange\\\",\\\"data\\\":{\\\"start\\\":375,\\\"end\\\":540}}\"]}}",
+      "actions": [
+        "{\"type\":\"ActionProfileSwitchPercent\",\"data\":{\"percentage\":130,\"durationInMinutes\":60}}"
+      ]
+    },
+    {
+      "id": "dab94902-be8e-4282-a486-34075f46d97b",
+      "title": "post meal high",
+      "enabled": false,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": false,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[\"{\\\"type\\\":\\\"TriggerBg\\\",\\\"data\\\":{\\\"bg\\\":9.000000000000007,\\\"comparator\\\":\\\"IS_EQUAL_OR_GREATER\\\",\\\"units\\\":\\\"mmol\\\"}}\",\"{\\\"type\\\":\\\"TriggerAutosensValue\\\",\\\"data\\\":{\\\"value\\\":120,\\\"comparator\\\":\\\"IS_LESSER\\\"}}\",\"{\\\"type\\\":\\\"TriggerTimeRange\\\",\\\"data\\\":{\\\"start\\\":600,\\\"end\\\":1435}}\"]}}",
+      "actions": [
+        "{\"type\":\"ActionProfileSwitchPercent\",\"data\":{\"percentage\":120,\"durationInMinutes\":15}}"
+      ]
+    },
+    {
+      "id": "aa30198a-4710-4ee2-939d-c05a51e27cbd",
+      "title": "stop post meal high",
+      "enabled": false,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": false,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[\"{\\\"type\\\":\\\"TriggerProfilePercent\\\",\\\"data\\\":{\\\"percentage\\\":120,\\\"comparator\\\":\\\"IS_EQUAL\\\"}}\",\"{\\\"type\\\":\\\"TriggerBg\\\",\\\"data\\\":{\\\"bg\\\":8.5,\\\"comparator\\\":\\\"IS_LESSER\\\",\\\"units\\\":\\\"mmol\\\"}}\"]}}",
+      "actions": [
+        "{\"type\":\"ActionProfileSwitch\",\"data\":{\"profileToSwitchTo\":\"standaard\"}}"
+      ]
+    },
+    {
+      "id": "60dc9ef7-c9c2-4639-830a-5faa1fdf0c46",
+      "title": "high then low TT",
+      "enabled": false,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": false,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[\"{\\\"type\\\":\\\"TriggerBg\\\",\\\"data\\\":{\\\"bg\\\":8,\\\"comparator\\\":\\\"IS_EQUAL_OR_GREATER\\\",\\\"units\\\":\\\"mmol\\\"}}\",\"{\\\"type\\\":\\\"TriggerDelta\\\",\\\"data\\\":{\\\"value\\\":0,\\\"units\\\":\\\"mmol\\\",\\\"deltaType\\\":\\\"DELTA\\\",\\\"comparator\\\":\\\"IS_GREATER\\\"}}\"]}}",
+      "actions": [
+        "{\"type\":\"ActionStartTempTarget\",\"data\":{\"value\":4.500000000000005,\"units\":\"mmol\",\"durationInMinutes\":10}}"
+      ]
+    },
+    {
+      "id": "a4c23143-1c76-4893-af3e-84be82beb4c5",
+      "title": "sport",
+      "enabled": true,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": true,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[]}}",
+      "actions": [
+        "{\"type\":\"ActionCarePortalEvent\",\"data\":{\"cpEvent\":\"NOTE\",\"note\":\"sport\",\"durationInMinutes\":180}}",
+        "{\"type\":\"ActionStartTempTarget\",\"data\":{\"value\":8.499999999999991,\"units\":\"mmol\",\"durationInMinutes\":180}}"
+      ]
+    },
+    {
+      "id": "6acf97a7-2530-4784-a516-16e48efe2e66",
+      "title": "1",
+      "enabled": true,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": true,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[]}}",
+      "actions": [
+        "{\"type\":\"ActionCarePortalEvent\",\"data\":{\"cpEvent\":\"NOTE\",\"note\":\"snack\",\"durationInMinutes\":30}}"
+      ]
+    },
+    {
+      "id": "74fbb183-45ae-40ea-8ca1-5d496fd8fb88",
+      "title": "2",
+      "enabled": true,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": true,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[]}}",
+      "actions": [
+        "{\"type\":\"ActionCarePortalEvent\",\"data\":{\"cpEvent\":\"NOTE\",\"note\":\"meal\",\"durationInMinutes\":30}}"
+      ]
+    },
+    {
+      "id": "100d0241-4acc-45fc-b1ab-0abf440ffb47",
+      "title": "3",
+      "enabled": true,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": true,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[]}}",
+      "actions": [
+        "{\"type\":\"ActionCarePortalEvent\",\"data\":{\"cpEvent\":\"NOTE\",\"note\":\"bfast\",\"durationInMinutes\":30}}"
+      ]
+    },
+    {
+      "id": "20fab581-328f-4df4-b8d8-27e3b375b13a",
+      "title": "4",
+      "enabled": true,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": true,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[]}}",
+      "actions": [
+        "{\"type\":\"ActionCarePortalEvent\",\"data\":{\"cpEvent\":\"NOTE\",\"note\":\"lunch\",\"durationInMinutes\":30}}"
+      ]
+    },
+    {
+      "id": "172e173b-89f9-4e35-8d4d-c873522cf1f9",
+      "title": "5",
+      "enabled": true,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": true,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[]}}",
+      "actions": [
+        "{\"type\":\"ActionCarePortalEvent\",\"data\":{\"cpEvent\":\"NOTE\",\"note\":\"dinner\",\"durationInMinutes\":30}}"
+      ]
+    },
+    {
+      "id": "1ea840e8-51ba-4238-94b0-fdc40e5738e4",
+      "title": "6",
+      "enabled": true,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": true,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[]}}",
+      "actions": [
+        "{\"type\":\"ActionCarePortalEvent\",\"data\":{\"cpEvent\":\"NOTE\",\"note\":\"highcarb\",\"durationInMinutes\":30}}"
+      ]
+    },
+    {
+      "id": "4233aeb4-405e-4b2e-a708-dd6d3b950121",
+      "title": "sleep",
+      "enabled": false,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": true,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[]}}",
+      "actions": [
+        "{\"type\":\"ActionCarePortalEvent\",\"data\":{\"cpEvent\":\"NOTE\",\"note\":\"sleep\",\"durationInMinutes\":90}}"
+      ]
+    },
+    {
+      "id": "190694c9-131d-4fab-b2dd-b14f622358d1",
+      "title": "stop",
+      "enabled": true,
+      "systemAction": false,
+      "readOnly": false,
+      "autoRemove": false,
+      "userAction": true,
+      "trigger": "{\"type\":\"TriggerConnector\",\"data\":{\"connectorType\":\"AND\",\"triggerList\":[]}}",
+      "actions": [
+        "{\"type\":\"ActionCarePortalEvent\",\"data\":{\"cpEvent\":\"NOTE\",\"note\":\"stop\",\"durationInMinutes\":5}}",
+        "{\"type\":\"ActionStopTempTarget\"}"
+      ]
+    }
+  ],
+  "ConfigBuilder_Enabled_APS_OpenAPSAIMIPlugin": "true",
+  "ConfigBuilder_Enabled_APS_OpenAPSAMAPlugin": "false",
+  "ConfigBuilder_Enabled_APS_OpenAPSAutoISFPlugin": "false",
+  "ConfigBuilder_Enabled_APS_OpenAPSSMBDynamicISFPlugin": "false",
+  "ConfigBuilder_Enabled_APS_OpenAPSSMBPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_AidexPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_DexcomPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_EversensePlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_GlimpPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_GlunovoPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_InstaraPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_IntelligoPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_MM640gPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_NSClientSourcePlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_NotificationReaderPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_OttaiPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_PatchedSiAppPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_PatchedSinoAppPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_PoctechPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_RandomBgPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_SyaiPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_SyaiTagPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_TomatoPlugin": "false",
+  "ConfigBuilder_Enabled_BGSOURCE_XdripSourcePlugin": "true",
+  "ConfigBuilder_Enabled_CONSTRAINTS_ObjectivesPlugin": "true",
+  "ConfigBuilder_Enabled_GENERAL_ActionsPlugin": "true",
+  "ConfigBuilder_Enabled_GENERAL_AutomationPlugin": "true",
+  "ConfigBuilder_Enabled_GENERAL_AutotunePlugin": "false",
+  "ConfigBuilder_Enabled_GENERAL_ConfigBuilderPlugin": "true",
+  "ConfigBuilder_Enabled_GENERAL_FoodPlugin": "false",
+  "ConfigBuilder_Enabled_GENERAL_MaintenancePlugin": "true",
+  "ConfigBuilder_Enabled_GENERAL_RemoteControlPlugin": "false",
+  "ConfigBuilder_Enabled_GENERAL_SmsCommunicatorPlugin": "false",
+  "ConfigBuilder_Enabled_LOOP_LoopPlugin": "true",
+  "ConfigBuilder_Enabled_PROFILE_ProfilePlugin": "true",
+  "ConfigBuilder_Enabled_PUMP_ApexPumpPlugin": "false",
+  "ConfigBuilder_Enabled_PUMP_ComboPlugin": "false",
+  "ConfigBuilder_Enabled_PUMP_ComboV2Plugin": "false",
+  "ConfigBuilder_Enabled_PUMP_DanaRKoreanPlugin": "false",
+  "ConfigBuilder_Enabled_PUMP_DanaRPlugin": "false",
+  "ConfigBuilder_Enabled_PUMP_DanaRSPlugin": "false",
+  "ConfigBuilder_Enabled_PUMP_DanaRv2Plugin": "false",
+  "ConfigBuilder_Enabled_PUMP_DiaconnG8Plugin": "false",
+  "ConfigBuilder_Enabled_PUMP_EopatchPumpPlugin": "false",
+  "ConfigBuilder_Enabled_PUMP_EquilPumpPlugin": "false",
+  "ConfigBuilder_Enabled_PUMP_InsightPlugin": "false",
+  "ConfigBuilder_Enabled_PUMP_LocalInsightPlugin": "false",
+  "ConfigBuilder_Enabled_PUMP_MedtronicPumpPlugin": "false",
+  "ConfigBuilder_Enabled_PUMP_MedtrumPlugin": "true",
+  "ConfigBuilder_Enabled_PUMP_OmnipodDashPumpPlugin": "false",
+  "ConfigBuilder_Enabled_PUMP_OmnipodErosPumpPlugin": "false",
+  "ConfigBuilder_Enabled_PUMP_VirtualPumpPlugin": "false",
+  "ConfigBuilder_Enabled_SENSITIVITY_SensitivityAAPSPlugin": "false",
+  "ConfigBuilder_Enabled_SENSITIVITY_SensitivityOref1Plugin": "true",
+  "ConfigBuilder_Enabled_SENSITIVITY_SensitivityWeightedAveragePlugin": "false",
+  "ConfigBuilder_Enabled_SMOOTHING_AdaptiveSmoothingPlugin": "true",
+  "ConfigBuilder_Enabled_SMOOTHING_AvgSmoothingPlugin": "false",
+  "ConfigBuilder_Enabled_SMOOTHING_ExponentialSmoothingPlugin": "false",
+  "ConfigBuilder_Enabled_SMOOTHING_NoSmoothingPlugin": "false",
+  "ConfigBuilder_Enabled_SMOOTHING_UnscentedKalmanFilterPlugin": "false",
+  "ConfigBuilder_Enabled_SYNC_GarminPlugin": "false",
+  "ConfigBuilder_Enabled_SYNC_NSClientPlugin": "false",
+  "ConfigBuilder_Enabled_SYNC_NSClientV3Plugin": "true",
+  "ConfigBuilder_Enabled_SYNC_OpenHumansUploaderPlugin": "false",
+  "ConfigBuilder_Enabled_SYNC_SmsCommunicatorPlugin": "false",
+  "ConfigBuilder_Enabled_SYNC_TidepoolPlugin": "false",
+  "ConfigBuilder_Enabled_SYNC_TizenPlugin": "false",
+  "ConfigBuilder_Enabled_SYNC_WearPlugin": "true",
+  "ConfigBuilder_Enabled_SYNC_XdripPlugin": "false",
+  "DisabledTo_basaltest": "0",
+  "DisabledTo_breadgrams": "0",
+  "DisabledTo_cob1": "0",
+  "DisabledTo_cob2": "0",
+  "DisabledTo_cob3": "0",
+  "DisabledTo_concentration1": "0",
+  "DisabledTo_concentration2": "0",
+  "DisabledTo_concentration3": "0",
+  "DisabledTo_dia": "0",
+  "DisabledTo_exercise": "0",
+  "DisabledTo_exercise2": "0",
+  "DisabledTo_extendedcarbs": "0",
+  "DisabledTo_hypott": "0",
+  "DisabledTo_ic": "0",
+  "DisabledTo_insulin": "0",
+  "DisabledTo_iob": "0",
+  "DisabledTo_isf": "0",
+  "DisabledTo_noisycgm": "0",
+  "DisabledTo_nsclient": "0",
+  "DisabledTo_objectives": "0",
+  "DisabledTo_objectives2": "0",
+  "DisabledTo_otherMedicationWarning": "0",
+  "DisabledTo_prerequisites": "0",
+  "DisabledTo_prerequisites2": "0",
+  "DisabledTo_profileswitch": "0",
+  "DisabledTo_profileswitch2": "0",
+  "DisabledTo_profileswitch4": "0",
+  "DisabledTo_profileswitchtime": "0",
+  "DisabledTo_pumpdisconnect": "0",
+  "DisabledTo_sensitivity": "0",
+  "DisabledTo_troubleshooting": "0",
+  "DisabledTo_update": "0",
+  "DisabledTo_wrongcarbs": "0",
+  "DisabledTo_wronginsulin": "0",
+  "DynISFAdjust": "200",
+  "Enable alternative activation of SMB always": "false",
+  "ExamTask_basaltest": "true",
+  "ExamTask_breadgrams": "true",
+  "ExamTask_cob1": "true",
+  "ExamTask_cob2": "true",
+  "ExamTask_cob3": "true",
+  "ExamTask_concentration1": "true",
+  "ExamTask_concentration2": "true",
+  "ExamTask_concentration3": "true",
+  "ExamTask_dia": "true",
+  "ExamTask_exercise": "true",
+  "ExamTask_exercise2": "true",
+  "ExamTask_extendedcarbs": "true",
+  "ExamTask_hypott": "true",
+  "ExamTask_ic": "true",
+  "ExamTask_insulin": "true",
+  "ExamTask_iob": "true",
+  "ExamTask_isf": "true",
+  "ExamTask_noisycgm": "true",
+  "ExamTask_nsclient": "true",
+  "ExamTask_objectives": "true",
+  "ExamTask_objectives2": "true",
+  "ExamTask_otherMedicationWarning": "true",
+  "ExamTask_prerequisites": "true",
+  "ExamTask_prerequisites2": "true",
+  "ExamTask_profileswitch": "true",
+  "ExamTask_profileswitch2": "true",
+  "ExamTask_profileswitch4": "true",
+  "ExamTask_profileswitchtime": "true",
+  "ExamTask_pumpdisconnect": "true",
+  "ExamTask_sensitivity": "true",
+  "ExamTask_troubleshooting": "true",
+  "ExamTask_update": "true",
+  "ExamTask_wrongcarbs": "true",
+  "ExamTask_wronginsulin": "true",
+  "I_understand": "true",
+  "LocalProfile_basal_0": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 0.65
+    },
+    {
+      "time": "01:00",
+      "timeAsSeconds": 3600,
+      "value": 0.7
+    },
+    {
+      "time": "02:00",
+      "timeAsSeconds": 7200,
+      "value": 0.8
+    },
+    {
+      "time": "03:00",
+      "timeAsSeconds": 10800,
+      "value": 0.8
+    },
+    {
+      "time": "04:00",
+      "timeAsSeconds": 14400,
+      "value": 0.85
+    },
+    {
+      "time": "05:00",
+      "timeAsSeconds": 18000,
+      "value": 0.85
+    },
+    {
+      "time": "06:00",
+      "timeAsSeconds": 21600,
+      "value": 0.9
+    },
+    {
+      "time": "07:00",
+      "timeAsSeconds": 25200,
+      "value": 0.9
+    },
+    {
+      "time": "08:00",
+      "timeAsSeconds": 28800,
+      "value": 0.9
+    },
+    {
+      "time": "09:00",
+      "timeAsSeconds": 32400,
+      "value": 0.85
+    },
+    {
+      "time": "10:00",
+      "timeAsSeconds": 36000,
+      "value": 0.85
+    },
+    {
+      "time": "11:00",
+      "timeAsSeconds": 39600,
+      "value": 0.75
+    },
+    {
+      "time": "12:00",
+      "timeAsSeconds": 43200,
+      "value": 0.5
+    },
+    {
+      "time": "13:00",
+      "timeAsSeconds": 46800,
+      "value": 0.45
+    },
+    {
+      "time": "14:00",
+      "timeAsSeconds": 50400,
+      "value": 0.4
+    },
+    {
+      "time": "15:00",
+      "timeAsSeconds": 54000,
+      "value": 0.3
+    },
+    {
+      "time": "16:00",
+      "timeAsSeconds": 57600,
+      "value": 0.25
+    },
+    {
+      "time": "17:00",
+      "timeAsSeconds": 61200,
+      "value": 0.3
+    },
+    {
+      "time": "18:00",
+      "timeAsSeconds": 64800,
+      "value": 0.4
+    },
+    {
+      "time": "19:00",
+      "timeAsSeconds": 68400,
+      "value": 0.5
+    },
+    {
+      "time": "20:00",
+      "timeAsSeconds": 72000,
+      "value": 0.55
+    },
+    {
+      "time": "21:00",
+      "timeAsSeconds": 75600,
+      "value": 0.6
+    },
+    {
+      "time": "22:00",
+      "timeAsSeconds": 79200,
+      "value": 0.6
+    },
+    {
+      "time": "23:00",
+      "timeAsSeconds": 82800,
+      "value": 0.65
+    }
+  ],
+  "LocalProfile_basal_1": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 0.6
+    },
+    {
+      "time": "01:00",
+      "timeAsSeconds": 3600,
+      "value": 0.65
+    },
+    {
+      "time": "02:00",
+      "timeAsSeconds": 7200,
+      "value": 0.7
+    },
+    {
+      "time": "03:00",
+      "timeAsSeconds": 10800,
+      "value": 0.75
+    },
+    {
+      "time": "04:00",
+      "timeAsSeconds": 14400,
+      "value": 0.8
+    },
+    {
+      "time": "05:00",
+      "timeAsSeconds": 18000,
+      "value": 0.85
+    },
+    {
+      "time": "06:00",
+      "timeAsSeconds": 21600,
+      "value": 0.9
+    },
+    {
+      "time": "09:00",
+      "timeAsSeconds": 32400,
+      "value": 0.8
+    },
+    {
+      "time": "10:00",
+      "timeAsSeconds": 36000,
+      "value": 0.7
+    },
+    {
+      "time": "11:00",
+      "timeAsSeconds": 39600,
+      "value": 0.6
+    },
+    {
+      "time": "12:00",
+      "timeAsSeconds": 43200,
+      "value": 0.5
+    },
+    {
+      "time": "13:00",
+      "timeAsSeconds": 46800,
+      "value": 0.45
+    },
+    {
+      "time": "14:00",
+      "timeAsSeconds": 50400,
+      "value": 0.4
+    },
+    {
+      "time": "15:00",
+      "timeAsSeconds": 54000,
+      "value": 0.3
+    },
+    {
+      "time": "16:00",
+      "timeAsSeconds": 57600,
+      "value": 0.25
+    },
+    {
+      "time": "17:00",
+      "timeAsSeconds": 61200,
+      "value": 0.3
+    },
+    {
+      "time": "18:00",
+      "timeAsSeconds": 64800,
+      "value": 0.4
+    },
+    {
+      "time": "19:00",
+      "timeAsSeconds": 68400,
+      "value": 0.6
+    }
+  ],
+  "LocalProfile_basal_2": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 0
+    }
+  ],
+  "LocalProfile_basal_3": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 0.05
+    }
+  ],
+  "LocalProfile_ic_0": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 5
+    },
+    {
+      "time": "15:00",
+      "timeAsSeconds": 54000,
+      "value": 7.4
+    },
+    {
+      "time": "19:00",
+      "timeAsSeconds": 68400,
+      "value": 5
+    }
+  ],
+  "LocalProfile_ic_1": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 5.2
+    },
+    {
+      "time": "15:00",
+      "timeAsSeconds": 54000,
+      "value": 7.6
+    },
+    {
+      "time": "19:00",
+      "timeAsSeconds": 68400,
+      "value": 5.2
+    }
+  ],
+  "LocalProfile_ic_2": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 0
+    }
+  ],
+  "LocalProfile_ic_3": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 5.2
+    },
+    {
+      "time": "15:00",
+      "timeAsSeconds": 54000,
+      "value": 7.6
+    },
+    {
+      "time": "19:00",
+      "timeAsSeconds": 68400,
+      "value": 5.2
+    }
+  ],
+  "LocalProfile_isf_0": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 1.4
+    }
+  ],
+  "LocalProfile_isf_1": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 2.3
+    }
+  ],
+  "LocalProfile_isf_2": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 0
+    }
+  ],
+  "LocalProfile_isf_3": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 1.5
+    }
+  ],
+  "LocalProfile_mgdl_0": "false",
+  "LocalProfile_mgdl_1": "false",
+  "LocalProfile_mgdl_2": "true",
+  "LocalProfile_mgdl_3": "false",
+  "LocalProfile_name_0": "Lyumjev fsl2 nano AIMI",
+  "LocalProfile_name_1": "Rapid fsl2 nano AAPS",
+  "LocalProfile_name_2": "LocalProfile1",
+  "LocalProfile_name_3": "temp 0 basal",
+  "LocalProfile_profiles": "2",
+  "LocalProfile_targethigh_0": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 5.5
+    }
+  ],
+  "LocalProfile_targethigh_1": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 5.5
+    }
+  ],
+  "LocalProfile_targethigh_2": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 0
+    }
+  ],
+  "LocalProfile_targethigh_3": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 5.5
+    }
+  ],
+  "LocalProfile_targetlow_0": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 5.5
+    }
+  ],
+  "LocalProfile_targetlow_1": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 5.5
+    }
+  ],
+  "LocalProfile_targetlow_2": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 0
+    }
+  ],
+  "LocalProfile_targetlow_3": [
+    {
+      "time": "00:00",
+      "timeAsSeconds": 0,
+      "value": 5.5
+    }
+  ],
+  "Monitor_resumed_AIMIHealthConnectPermissionActivityMTR": "1774787825990",
+  "Monitor_resumed_AdjustmentDetailsActivity": "1779273149410",
+  "Monitor_resumed_AimiModeSettingsActivity": "1771779687735",
+  "Monitor_resumed_AimiProfileAdvisorActivity": "1778340609678",
+  "Monitor_resumed_BolusProgressHelperActivity": "1775750097696",
+  "Monitor_resumed_ComparatorActivity": "1768047824680",
+  "Monitor_resumed_ComposeMainActivity": "1779283191653",
+  "Monitor_resumed_ContextActivity": "1779214969054",
+  "Monitor_resumed_CustomWatchfaceImportListActivity": "1770538976963",
+  "Monitor_resumed_CwfInfosActivity": "1764505421751",
+  "Monitor_resumed_DashboardModesActivity": "1775984973879",
+  "Monitor_resumed_DashboardPreviewActivity": "1776625048166",
+  "Monitor_resumed_ErrorHelperActivity": "1767097090827",
+  "Monitor_resumed_HistoryBrowseActivity": "1776789173683",
+  "Monitor_resumed_LogSettingActivity": "1765132307153",
+  "Monitor_resumed_MainActivity": "1776790351949",
+  "Monitor_resumed_MealAdvisorActivity": "1776245427352",
+  "Monitor_resumed_MealAdvisorCameraActivity": "1774866839215",
+  "Monitor_resumed_MedtrumActivity": "1775591704843",
+  "Monitor_resumed_PrefImportListActivity": "1750863882911",
+  "Monitor_resumed_PreferencesActivity": "1775994194885",
+  "Monitor_resumed_ProfileHelperActivity": "1773218993325",
+  "Monitor_resumed_QuickWizardListActivity": "1765122052937",
+  "Monitor_resumed_RequestDexcomPermissionActivity": "1732112780015",
+  "Monitor_resumed_SetupWizardActivity": "1743108690890",
+  "Monitor_resumed_SingleFragmentActivity": "1776012087895",
+  "Monitor_resumed_StatsActivity": "1775710747057",
+  "Monitor_resumed_TDDStatsActivity": "1774997729039",
+  "Monitor_resumed_TreatmentsActivity": "1775662277579",
+  "Monitor_resumed_UserManualActivity": "1779279867133",
+  "Monitor_start_AIMIHealthConnectPermissionActivityMTR": "1768731922089",
+  "Monitor_start_AdjustmentDetailsActivity": "1764420958415",
+  "Monitor_start_AimiModeSettingsActivity": "1765357230211",
+  "Monitor_start_AimiProfileAdvisorActivity": "1765300863430",
+  "Monitor_start_BolusProgressHelperActivity": "1732121077407",
+  "Monitor_start_ComparatorActivity": "1764427063259",
+  "Monitor_start_ComposeMainActivity": "1775760702215",
+  "Monitor_start_ContextActivity": "1767541074235",
+  "Monitor_start_CustomWatchfaceImportListActivity": "1742121861357",
+  "Monitor_start_CwfInfosActivity": "1742121895009",
+  "Monitor_start_DashboardModesActivity": "1764426467084",
+  "Monitor_start_DashboardPreviewActivity": "1764426782151",
+  "Monitor_start_ErrorHelperActivity": "1736066834825",
+  "Monitor_start_HistoryBrowseActivity": "1732116734187",
+  "Monitor_start_LogSettingActivity": "1732738137839",
+  "Monitor_start_MainActivity": "1732112269338",
+  "Monitor_start_MealAdvisorActivity": "1765731635004",
+  "Monitor_start_MealAdvisorCameraActivity": "1774866848840",
+  "Monitor_start_MedtrumActivity": "1739367982111",
+  "Monitor_start_PrefImportListActivity": "1732898753592",
+  "Monitor_start_PreferencesActivity": "1732113247848",
+  "Monitor_start_ProfileHelperActivity": "1732738324044",
+  "Monitor_start_QuickWizardListActivity": "1732472557261",
+  "Monitor_start_RequestDexcomPermissionActivity": "1732112270513",
+  "Monitor_start_SetupWizardActivity": "1732112824988",
+  "Monitor_start_SingleFragmentActivity": "1732114694258",
+  "Monitor_start_StatsActivity": "1732116901213",
+  "Monitor_start_TDDStatsActivity": "1742114795208",
+  "Monitor_start_TreatmentsActivity": "1732117948950",
+  "Monitor_start_UserManualActivity": "1764426448610",
+  "Monitor_total_AIMIHealthConnectPermissionActivityMTR": "1851408",
+  "Monitor_total_AdjustmentDetailsActivity": "14314081",
+  "Monitor_total_AimiModeSettingsActivity": "619898",
+  "Monitor_total_AimiProfileAdvisorActivity": "5710794",
+  "Monitor_total_BolusProgressHelperActivity": "20555844",
+  "Monitor_total_ComparatorActivity": "469676",
+  "Monitor_total_ComposeMainActivity": "167364439",
+  "Monitor_total_ContextActivity": "7121390",
+  "Monitor_total_CustomWatchfaceImportListActivity": "3950166",
+  "Monitor_total_CwfInfosActivity": "460972",
+  "Monitor_total_DashboardModesActivity": "8861438",
+  "Monitor_total_DashboardPreviewActivity": "31513249",
+  "Monitor_total_ErrorHelperActivity": "116107",
+  "Monitor_total_HistoryBrowseActivity": "53083661",
+  "Monitor_total_LogSettingActivity": "435364",
+  "Monitor_total_MainActivity": "2174217948",
+  "Monitor_total_MealAdvisorActivity": "1194602",
+  "Monitor_total_MealAdvisorCameraActivity": "9625",
+  "Monitor_total_MedtrumActivity": "82662861",
+  "Monitor_total_PrefImportListActivity": "5633",
+  "Monitor_total_PreferencesActivity": "89042556",
+  "Monitor_total_ProfileHelperActivity": "429668",
+  "Monitor_total_QuickWizardListActivity": "5805492",
+  "Monitor_total_RequestDexcomPermissionActivity": "1517",
+  "Monitor_total_SetupWizardActivity": "1546718",
+  "Monitor_total_SingleFragmentActivity": "62938138",
+  "Monitor_total_StatsActivity": "18295154",
+  "Monitor_total_TDDStatsActivity": "552737",
+  "Monitor_total_TreatmentsActivity": "49439567",
+  "Monitor_total_UserManualActivity": "8380597",
+  "OApsAIMIAntiStallBias": "0.1",
+  "OApsAIMIDeltaPosRelease": "1.0",
+  "OApsAIMIHighBg": "180.0",
+  "OApsAIMIKickerMaxMin": "30",
+  "OApsAIMIKickerMinUph": "0.2",
+  "OApsAIMIKickerStartMin": "10",
+  "OApsAIMIKickerStep": "0.15",
+  "OApsAIMILastEstimatedCarbTime": "1.7748669E12",
+  "OApsAIMILastEstimatedCarbs": "35.0",
+  "OApsAIMIMaxMultiplier": "1.6",
+  "OApsAIMIPlateauBandAbs": "2.5",
+  "OApsAIMIR2Confident": "0.7",
+  "OApsAIMIZeroResumeFrac": "0.25",
+  "OApsAIMIZeroResumeMax": "30",
+  "OApsAIMIZeroResumeMin": "10",
+  "OApsAIMI_Enable_night": "true",
+  "ObjectivesDisconnectUsed": "true",
+  "ObjectivesLoopUsed": "true",
+  "ObjectivesProfileSwitchUsed": "true",
+  "ObjectivesReconnectUsed": "true",
+  "ObjectivesScaleUsed": "true",
+  "ObjectivesTempTargetUsed": "true",
+  "Objectives_accomplished_auto": "1748069327113",
+  "Objectives_accomplished_autosens": "1742800799062",
+  "Objectives_accomplished_config": "1732374081232",
+  "Objectives_accomplished_dyn": "0",
+  "Objectives_accomplished_exam": "1776870930121",
+  "Objectives_accomplished_maxbasal": "1740221634970",
+  "Objectives_accomplished_maxiob": "1742161044836",
+  "Objectives_accomplished_maxiobzero": "1742056856004",
+  "Objectives_accomplished_openloop": "1736797770065",
+  "Objectives_accomplished_smb": "1745231243180",
+  "Objectives_accomplished_usage": "1732475180458",
+  "Objectives_started_auto": "1745231265870",
+  "Objectives_started_autosens": "1742161056888",
+  "Objectives_started_config": "1732114386108",
+  "Objectives_started_dyn": "0",
+  "Objectives_started_exam": "1732538350606",
+  "Objectives_started_maxbasal": "1740221623950",
+  "Objectives_started_maxiob": "1742056860540",
+  "Objectives_started_maxiobzero": "1741169226432",
+  "Objectives_started_openloop": "1736184301551",
+  "Objectives_started_smb": "1742800826028",
+  "Objectives_started_usage": "1732469443954",
+  "ObjectivesbgIsAvailableInNS": "true",
+  "ObjectivesmanualEnacts": "52",
+  "ObjectivespumpStatusIsAvailableInNS": "true",
+  "QuickWizard": [
+    {
+      "guid": "92c55002-f2a4-4544-bed8-5ae8166a84b0",
+      "buttonText": "zondags ontbijt",
+      "carbs": 45,
+      "validFrom": 30600,
+      "validTo": 36000,
+      "device": 0,
+      "usePercentage": 0,
+      "percentage": 100,
+      "useBG": 0,
+      "useCOB": 0,
+      "useBolusIOB": 0,
+      "useBasalIOB": 0,
+      "useTrend": 0,
+      "useSuperBolus": 0,
+      "useTempTarget": 0,
+      "carbTime": 20,
+      "useAlarm": 1,
+      "useIOB": 0,
+      "usePositiveIOBOnly": 1,
+      "useEcarbs": 1,
+      "time": 0,
+      "duration": 0,
+      "carbs2": 0
+    },
+    {
+      "guid": "3adc794f-4995-45d0-af8d-d9dbc72e3051",
+      "buttonText": "Ontbijt",
+      "carbs": 6,
+      "validFrom": 24300,
+      "validTo": 29700,
+      "device": 0,
+      "usePercentage": 0,
+      "percentage": 100,
+      "useBG": 0,
+      "useCOB": 0,
+      "useBolusIOB": 0,
+      "useBasalIOB": 0,
+      "useTrend": 0,
+      "useSuperBolus": 1,
+      "useTempTarget": 0,
+      "carbTime": 15,
+      "useAlarm": 1,
+      "useIOB": 0,
+      "usePositiveIOBOnly": 1,
+      "useEcarbs": 1,
+      "time": 0,
+      "duration": 0,
+      "carbs2": 0
+    },
+    {
+      "guid": "dd593b58-82b4-403a-8b82-a3c3b5020855",
+      "buttonText": "lunch thuiswerken ",
+      "carbs": 32,
+      "validFrom": 43200,
+      "validTo": 48600,
+      "device": 0,
+      "usePercentage": "default",
+      "percentage": 100,
+      "carbTime": 15,
+      "useAlarm": 1,
+      "useBG": 0,
+      "useCOB": 0,
+      "useIOB": 0,
+      "usePositiveIOBOnly": 1,
+      "useTrend": 0,
+      "useSuperBolus": 1,
+      "useTempTarget": 0,
+      "useEcarbs": 1,
+      "time": 0,
+      "duration": 0,
+      "carbs2": 0
+    },
+    {
+      "guid": "1c45db72-6f0c-4fc8-b4f7-0a9ab945d861",
+      "buttonText": "lunch",
+      "carbs": 23,
+      "validFrom": 43200,
+      "validTo": 47700,
+      "device": 0,
+      "usePercentage": 0,
+      "percentage": 100,
+      "useBG": 0,
+      "useCOB": 0,
+      "useBolusIOB": 0,
+      "useBasalIOB": 0,
+      "useTrend": 0,
+      "useSuperBolus": 1,
+      "useTempTarget": 0,
+      "carbTime": 15,
+      "useAlarm": 1,
+      "useIOB": 0,
+      "usePositiveIOBOnly": 1,
+      "useEcarbs": 1,
+      "time": 0,
+      "duration": 0,
+      "carbs2": 0
+    }
+  ],
+  "TBB": "15,300",
+  "aaps_directory": "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FAAPS",
+  "absorption_cutoff": "6.0",
+  "active_alarms": "",
+  "active_pump_change_timestamp": "1775922537298",
+  "active_pump_serial_number": "e98d7e39",
+  "active_pump_type": "Medtrum Nano",
+  "actual_basal_profile": "EgDQADzgAHgAAfAQAWghARwSAZTyANCiAAyTAEiDAIRjAMBTAPxjADiEAHSkALC0AOzEAGTVAA==\n    ",
+  "age": "adult",
+  "aimi_activity_source_mode": "auto",
+  "aimi_advisor_provider": "GEMINI",
+  "aimi_auditor_enabled": "true",
+  "aimi_auditor_max_per_hour": "6",
+  "aimi_auditor_min_confidence": "60",
+  "aimi_auditor_mode": "SOFT_MODULATION",
+  "aimi_auditor_timeout_seconds": "120",
+  "aimi_dyn_isf_trajectory_shadow_only": "true",
+  "aimi_dyn_isf_trajectory_tuning_enabled": "true",
+  "aimi_emergency_sos_enable": "false",
+  "aimi_emergency_sos_phone": "",
+  "aimi_emergency_sos_threshold": "55",
+  "aimi_endo_basal_mult": "1.3",
+  "aimi_endo_enable": "false",
+  "aimi_endo_flare": "false",
+  "aimi_endo_flare_duration": "4",
+  "aimi_endo_smb_dampen": "0.7",
+  "aimi_isf_fusion_max_change_per_tick": "0.5",
+  "aimi_isf_fusion_max_factor": "1.5",
+  "aimi_isf_fusion_min_factor": "0.7",
+  "aimi_meal_advisor_trigger": "false",
+  "aimi_mpc_insulin_u_per_kg_per_5min": "0.08",
+  "aimi_physio_assistant_enable": "true",
+  "aimi_physio_debug_logs": "false",
+  "aimi_physio_hrv_enable": "true",
+  "aimi_physio_llm_enable": "true",
+  "aimi_physio_sleep_enable": "true",
+  "aimi_pkpd_bounds_dia_max_h": "12.0",
+  "aimi_pkpd_bounds_dia_min_h": "4.0",
+  "aimi_pkpd_bounds_peak_min_max": "120.0",
+  "aimi_pkpd_bounds_peak_min_min": "30.0",
+  "aimi_pkpd_initial_dia_h": "6.0",
+  "aimi_pkpd_initial_peak_min": "40.0",
+  "aimi_pkpd_max_dia_change_per_day_h": "1.0",
+  "aimi_pkpd_max_peak_change_per_day_min": "10.0",
+  "aimi_pkpd_pragmatic_relief_min_factor": "0.75",
+  "aimi_pkpd_state_dia_h": "5.761418",
+  "aimi_pkpd_state_dominant_branch": "LEARNED",
+  "aimi_pkpd_state_effective_peak": "61.96692",
+  "aimi_pkpd_state_last_peak_gov_console_echoed": "PEAK_GOV: prior=45 physio=0 site=0.0 anchor=45.0 learned=75.8 w=0.55 traj=+0.0 -> eff=62.0 [LEARNED]",
+  "aimi_pkpd_state_last_peak_gov_log": "PEAK_GOV: prior=45 physio=0 site=0.0 anchor=45.0 learned=75.8 w=0.55 traj=+0.0 -> eff=62.0 [LEARNED]",
+  "aimi_pkpd_state_peak_min": "75.84613",
+  "aimi_pkpd_state_physio_peak": "0.0",
+  "aimi_pkpd_state_prior_peak": "45.0",
+  "aimi_pkpd_state_site_peak": "0.0",
+  "aimi_pkpd_state_traj_peak": "0.0",
+  "aimi_pregnancy_due_date_string": "",
+  "aimi_priority_max_iob_extra_u": "3.1",
+  "aimi_priority_max_iob_factor": "1.2",
+  "aimi_red_carpet_restore_threshold": "0.75",
+  "aimi_smb_exercise_damping": "0.5",
+  "aimi_smb_late_fat_damping": "0.5",
+  "aimi_smb_tail_damping": "0.6",
+  "aimi_smb_tail_threshold": "0.35",
+  "alarm_setting": "6",
+  "allow_hardware_pump": "true",
+  "always_use_shortavg": "true",
+  "application_protection": "0",
+  "autoISF_max": "1.5",
+  "autoISF_min": "0.5",
+  "autodrive_max_basal": "4.5",
+  "autosens_max": "1.2",
+  "autosens_min": "0.7",
+  "bgAccel_ISF_weight": "0.02",
+  "bgBrake_ISF_weight": "0.02",
+  "bolus_amount_to_be_delivered": "0.05",
+  "bolus_protection": "0",
+  "bolus_start_time": "1779281207887",
+  "boluswizard_percentage": "100",
+  "bt_watchdog": "false",
+  "carbsReqThreshold": "20",
+  "carbs_button_increment_1": "5",
+  "carbs_button_increment_2": "10",
+  "carbs_button_increment_3": "20",
+  "compose_graphconfig": {
+    "bgOverlays": [
+      "ACTIVITY"
+    ],
+    "iobOverlays": [
+      "ACTIVITY"
+    ],
+    "bgHeight": 170,
+    "iobHeight": 100,
+    "secondaryGraphs": []
+  },
+  "count_steps_watch": "true",
+  "current_sequence_number": "211",
+  "daily_max_insulin": "100",
+  "device_type": "88",
+  "dexcom_lognssensorchange": "true",
+  "dexcomg5_nsupload": "true",
+  "dura_ISF_weight": "0.2",
+  "dynisf_adjust_sensitivity": "true",
+  "enableSMB_after_carbs": "true",
+  "enableSMB_always": "true",
+  "enableSMB_with_COB": "true",
+  "enableSMB_with_high_temptarget": "false",
+  "enableSMB_with_temptarget": "true",
+  "enable_carbs_required_alert_local": "false",
+  "enable_fabric2": "true",
+  "enable_missed_bg_readings": "false",
+  "enable_pump_unreachable_alert": "true",
+  "enable_unattended_export": "true",
+  "export_all_cloud_enabled": "false",
+  "export_csv_cloud_enabled": "true",
+  "export_csv_local_enabled": "false",
+  "export_log_cloud_enabled": "true",
+  "export_settings_cloud_enabled": "true",
+  "export_settings_local_enabled": "true",
+  "fill_button1": "0.3",
+  "fill_button2": "0.0",
+  "fill_button3": "0.0",
+  "gradually_increase_notification_volume": "true",
+  "graphconfig": [
+    [
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ],
+    [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ],
+    [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  ],
+  "half_basal_exercise_target": "160",
+  "high_mark": "180.0",
+  "high_temptarget_raises_sensitivity": "false",
+  "higher_ISFrange_weight": "0.2",
+  "hourly_max_insulin": "25",
+  "insulin_button_increment_1": "0.5",
+  "insulin_button_increment_2": "1.0",
+  "insulin_button_increment_3": "2.0",
+  "insulin_configuration": {
+    "insulin": [
+      {
+        "insulinLabel": "Novorapid 75m 8h U100",
+        "insulinEndTime": 28800000,
+        "insulinPeakTime": 4500000,
+        "concentration": 1.0,
+        "insulinNickname": "Novorapid"
+      },
+      {
+        "insulinLabel": "Lyumjev 45m 7.5h U100",
+        "insulinEndTime": 27000000,
+        "insulinPeakTime": 2700000,
+        "concentration": 1.0,
+        "insulinNickname": "Lyumjev"
+      },
+      {
+        "insulinLabel": "Lyumjev 45m 6h U100",
+        "insulinEndTime": 21600000,
+        "insulinPeakTime": 2700000,
+        "concentration": 1.0,
+        "insulinNickname": "Lyumjev"
+      }
+    ]
+  },
+  "iob_threshold_percent": "60",
+  "keep_screen_on": "false",
+  "key_Acceleration_autodrive_mode": "1.0",
+  "key_aimi_adaptive_basal_max_scaling": "1.3",
+  "key_aimi_advisor_personal_oref_ml": "true",
+  "key_aimi_context_enabled": "true",
+  "key_aimi_context_llm_enabled": "true",
+  "key_aimi_iob_surveillance_guard": "true",
+  "key_aimi_pkpd_enabled": "true",
+  "key_aimi_pkpd_pragmatic_relief_enabled": "true",
+  "key_aimi_straight_line_tube_enabled": "false",
+  "key_aimi_t3c_activation_threshold": "130.0",
+  "key_aimi_t3c_aggressiveness": "1.0",
+  "key_aimi_t3c_anticipation_strength": "0.0",
+  "key_aimi_t3c_brittle_mode": "false",
+  "key_aimi_thyroid_debug": "false",
+  "key_aimi_thyroid_enabled": "false",
+  "key_aimi_thyroid_guard_level": "HIGH",
+  "key_aimi_thyroid_manual_status": "EUTHYROID",
+  "key_aimi_thyroid_mode": "MANUAL",
+  "key_aimi_thyroid_treatment_phase": "NONE",
+  "key_aimi_trajectory_guard_enabled": "true",
+  "key_aimiweight": "74.0",
+  "key_bolus_storage": [],
+  "key_cho": "150.0",
+  "key_combinedDelta_autodrive_mode": "2.0",
+  "key_enable_ML_training": "true",
+  "key_mindeviation_autodrive_mode": "1.0",
+  "key_oaps_aimi_BF_factor": "75.0",
+  "key_oaps_aimi_BF_interval": "3",
+  "key_oaps_aimi_HC_factor": "140.0",
+  "key_oaps_aimi_HC_interval": "3",
+  "key_oaps_aimi_autodriveBG": "90",
+  "key_oaps_aimi_autodriveTarget": "70",
+  "key_oaps_aimi_dinner_factor": "110.0",
+  "key_oaps_aimi_dinner_interval": "3",
+  "key_oaps_aimi_highBG_interval": "3",
+  "key_oaps_aimi_logsize": "25",
+  "key_oaps_aimi_lunch_factor": "90.0",
+  "key_oaps_aimi_lunch_interval": "3",
+  "key_oaps_aimi_meal_factor": "75.0",
+  "key_oaps_aimi_meal_interval": "3",
+  "key_oaps_aimi_ngr_age_years": "14",
+  "key_oaps_aimi_ngr_basal_multiplier": "1.1",
+  "key_oaps_aimi_ngr_decay_minutes": "20",
+  "key_oaps_aimi_ngr_enabled": "false",
+  "key_oaps_aimi_ngr_max_iob_extra": "0.5",
+  "key_oaps_aimi_ngr_max_smb_clamp": "1.2",
+  "key_oaps_aimi_ngr_min_duration": "30",
+  "key_oaps_aimi_ngr_min_eventual_over_target": "15",
+  "key_oaps_aimi_ngr_min_rise_slope": "5.0",
+  "key_oaps_aimi_ngr_night_end": "06:00",
+  "key_oaps_aimi_ngr_night_start": "22:00",
+  "key_oaps_aimi_ngr_smb_multiplier": "1.2",
+  "key_oaps_aimi_sleep_factor": "30.0",
+  "key_oaps_aimi_sleep_interval": "5",
+  "key_oaps_aimi_snack_factor": "75.0",
+  "key_oaps_aimi_snack_interval": "3",
+  "key_oaps_aimi_wcycle_contraceptive": "NONE",
+  "key_oaps_aimi_wcycle_thyroid": "EUTHYROID",
+  "key_oaps_aimi_wcycle_tracking_mode": "FIXED_28",
+  "key_oaps_aimi_wcycle_verneuil": "NONE",
+  "key_openapsaimi_high_bg_max_smb": "2.5",
+  "key_openapsaimi_max_smb": "2.0",
+  "key_prebolus2_BF_mode": "1.6",
+  "key_prebolus2_dinner_mode": "2.2",
+  "key_prebolus2_lunch_mode": "2.2",
+  "key_prebolus_BF_mode": "1.5",
+  "key_prebolus_autodrive_mode": "0.95",
+  "key_prebolus_dinner_mode": "3.1",
+  "key_prebolus_highcarb_mode": "3.2",
+  "key_prebolus_highcarb_mode2": "3.3",
+  "key_prebolus_lunch_mode": "2.1",
+  "key_prebolus_meal_mode": "2.0",
+  "key_prebolus_snack_mode": "1.0",
+  "key_prebolussmall_autodrive_mode": "0.45",
+  "key_reset_boluswizard_percentage_time": "16",
+  "key_tdd7": "40.0",
+  "key_use_AimiPregnancy": "false",
+  "key_use_Aimi_autoDrive": "false",
+  "key_use_Aimi_honeymoon": "false",
+  "key_use_Aimi_wcycle": "false",
+  "key_use_Aimi_wcycle_require_confirm": "false",
+  "key_use_Aimi_wcycle_shadow": "false",
+  "key_use_Aimi_xdripOM": "true",
+  "key_use_aimi_autodrive_active": "true",
+  "key_use_aimi_t3c_adaptive_basal": "true",
+  "key_use_unified_reactivity": "true",
+  "key_usersuperbolus": "false",
+  "key_wcycle_avg_length": "28",
+  "key_wcycle_clamp_max": "1.25",
+  "key_wcycle_clamp_min": "0.8",
+  "key_wcycledateday": "1.0",
+  "language": "en",
+  "last_bolus_amount": "0.05",
+  "last_bolus_time": "1779281208000",
+  "last_cleanup_run": "1779212063908",
+  "last_connection": "1779282981575",
+  "last_revoked_certs_check": "1779199773992",
+  "last_successful_version_check_timestamp": "1745398685396",
+  "last_versionchecker_plugin_warning_timestamp": "1732112270989",
+  "last_versionchecker_warning": "1775728886727",
+  "lgsThreshold": "90.0",
+  "local_profile_last_change": "1769002545341",
+  "location": "PASSIVE",
+  "log_APS": "true",
+  "log_AUTOMATION": "true",
+  "log_AUTOSENS": "false",
+  "log_AUTOTUNE": "false",
+  "log_BGSOURCE": "true",
+  "log_CONFIGBUILDER": "true",
+  "log_CONSTRAINTS": "true",
+  "log_CORE": "true",
+  "log_DATABASE": "true",
+  "log_DATATREATMENTS": "false",
+  "log_EVENTS": "false",
+  "log_GARMIN": "true",
+  "log_GLUCOSE": "false",
+  "log_HTTP": "true",
+  "log_LOCATION": "true",
+  "log_NOTIFICATION": "true",
+  "log_NSCLIENT": "true",
+  "log_OHUPLOADER": "true",
+  "log_PROFILE": "true",
+  "log_PUMP": "true",
+  "log_PUMPBTCOMM": "true",
+  "log_PUMPCOMM": "true",
+  "log_PUMPEMULATOR": "false",
+  "log_PUMPQUEUE": "true",
+  "log_SMS": "true",
+  "log_TIDEPOOL": "true",
+  "log_UI": "false",
+  "log_WEAR": "true",
+  "log_WIDGET": "true",
+  "log_WORKER": "true",
+  "log_XDRIP": "true",
+  "loop_openmode_min_change": "20",
+  "low_mark": "72.0",
+  "low_temptarget_lowers_sensitivity": "false",
+  "lower_ISFrange_weight": "0.2",
+  "maintenance_logs_amount": "10",
+  "meal_modes_max_basal": "4.2",
+  "missed_bg_readings_threshold": "15",
+  "nextMissedReadingsAlarm": "1779258100292",
+  "nextPumpDisconnectedAlarm": "1779284781575",
+  "notification_reader_packages": {
+    "version": 3,
+    "packages": [
+      {
+        "package": "com.dexcom.g6",
+        "sensor": "AAPS-DexcomG6",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.g6.region1.mmol",
+        "sensor": "AAPS-DexcomG6",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.g6.region2.mgdl",
+        "sensor": "AAPS-DexcomG6",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.g6.region3.mgdl",
+        "sensor": "AAPS-DexcomG6",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.g6.region4.mmol",
+        "sensor": "AAPS-DexcomG6",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.g6.region5.mmol",
+        "sensor": "AAPS-DexcomG6",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.g6.region6.mgdl",
+        "sensor": "AAPS-DexcomG6",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.g6.region7.mmol",
+        "sensor": "AAPS-DexcomG6",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.g6.region8.mmol",
+        "sensor": "AAPS-DexcomG6",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.g6.region9.mgdl",
+        "sensor": "AAPS-DexcomG6",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.g6.region10.mgdl",
+        "sensor": "AAPS-DexcomG6",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.g6.region11.mmol",
+        "sensor": "AAPS-DexcomG6",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.g7",
+        "sensor": "AAPS-DexcomG7",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.dexcomone",
+        "sensor": "AAPS-Dexcom",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.d1plus",
+        "sensor": "AAPS-Dexcom",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.dexcom.stelo",
+        "sensor": "AAPS-Dexcom",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.camdiab.fx_alert.mmoll",
+        "sensor": "AAPS-Dexcom",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.camdiab.fx_alert.mgdl",
+        "sensor": "AAPS-Dexcom",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.camdiab.fx_alert.hx.mmoll",
+        "sensor": "AAPS-Dexcom",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.camdiab.fx_alert.hx.mgdl",
+        "sensor": "AAPS-Dexcom",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.camdiab.fx_alert.mmoll.ca",
+        "sensor": "AAPS-Dexcom",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.medtronic.diabetes.guardian",
+        "sensor": "MM600Series",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.medtronic.diabetes.guardianconnect",
+        "sensor": "MM600Series",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.medtronic.diabetes.guardianconnect.us",
+        "sensor": "MM600Series",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.medtronic.diabetes.minimedmobile.eu",
+        "sensor": "MM600Series",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.medtronic.diabetes.minimedmobile.us",
+        "sensor": "MM600Series",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.medtronic.diabetes.simplera.eu",
+        "sensor": "Simplera",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.medtronic.diabetes.simplera.us",
+        "sensor": "Simplera",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.senseonics.gen12androidapp",
+        "sensor": "Eversense E3",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.senseonics.androidapp",
+        "sensor": "Eversense E3",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.senseonics.eversense365.us",
+        "sensor": "Eversense 365",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.microtechmd.cgms.uk",
+        "sensor": "GlucoRx Aidex",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.microtechmd.cgms.mg",
+        "sensor": "GlucoRx Aidex",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.microtech.aidexx",
+        "sensor": "GlucoRx Aidex",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.microtech.aidexx.mgdl",
+        "sensor": "GlucoRx Aidex",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.microtech.aidexx.linxneo.mmoll",
+        "sensor": "GlucoRx Aidex",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.microtech.aidexx.equil.mmoll",
+        "sensor": "GlucoRx Aidex",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.microtech.aidexx.diaexport.mmoll",
+        "sensor": "GlucoRx Aidex",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.microtech.aidexx.smart.mmoll",
+        "sensor": "GlucoRx Aidex",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.ottai.seas",
+        "sensor": "Ottai",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.ottai.tag",
+        "sensor": "Ottai",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.sinocare.cgm.ce",
+        "sensor": "Sino App",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.sinocare.ican.health.ce",
+        "sensor": "Sino App",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.sinocare.ican.health.ru",
+        "sensor": "Sino App",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.kakaohealthcare.pasta",
+        "sensor": "Unknown",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.glucotech.app.android",
+        "sensor": "Unknown",
+        "intervalMinutes": 5
+      },
+      {
+        "package": "com.suswel.ai",
+        "sensor": "Unknown",
+        "intervalMinutes": 5
+      }
+    ]
+  },
+  "ns_alarm_stale_data_value": "16",
+  "ns_alarm_urgent_stale_data_value": "31",
+  "ns_alarms": "false",
+  "ns_allow_roaming": "true",
+  "ns_announcements": "false",
+  "ns_battery": "true",
+  "ns_bolus_calculator_result_last_synced_id": "0",
+  "ns_bolus_last_synced_id": "34857",
+  "ns_carbs_last_synced_id": "65",
+  "ns_cellular": "true",
+  "ns_charging": "true",
+  "ns_client_paused": "false",
+  "ns_client_v3_last_modified": {
+    "collections": {
+      "profile": 1769002546372,
+      "treatments": 1779281809999,
+      "foods": 18799
+    }
+  },
+  "ns_create_announcements_from_carbs_req": "false",
+  "ns_create_announcements_from_errors": "false",
+  "ns_device_status_last_synced_id": "143611",
+  "ns_effective_profile_switch_last_synced_id": "64",
+  "ns_glucose_value_last_sync": "181573",
+  "ns_log_app_started_event": "false",
+  "ns_profile_store_last_synced_timestamp": "1769002546033",
+  "ns_profile_switch_last_synced_id": "59",
+  "ns_receive_carbs": "false",
+  "ns_receive_cgm": "false",
+  "ns_receive_insulin": "false",
+  "ns_receive_profile_store": "false",
+  "ns_receive_profile_switch": "false",
+  "ns_receive_running_mode": "false",
+  "ns_receive_tbr_eb": "false",
+  "ns_receive_temp_target": "false",
+  "ns_receive_therapy_events": "false",
+  "ns_running_mode_last_synced_id": "237",
+  "ns_sync_slow": "true",
+  "ns_temporary_basal_last_synced_id": "141191",
+  "ns_temporary_target_last_sync": "1318",
+  "ns_therapy_event_last_sync": "3751",
+  "ns_upload": "true",
+  "ns_use_ws": "false",
+  "ns_wifi": "true",
+  "ns_wifi_ssids": "",
+  "oa_aimi_last_prebolus_time_ms": "1779281202975",
+  "openaps_smb_min_5m_carbimpact": "6.5",
+  "openapsama_current_basal_safety_multiplier": "4.5",
+  "openapsama_enable_autoISF": "true",
+  "openapsama_max_daily_safety_multiplier": "3.5",
+  "openapsama_min_5m_carbimpact": "8.0",
+  "openapsama_smb_delivery_ratio": "0.6",
+  "openapsama_smb_delivery_ratio_bg_range": "40.0",
+  "openapsama_smb_delivery_ratio_max": "0.8",
+  "openapsama_smb_delivery_ratio_min": "0.5",
+  "openapsama_smb_max_range_extension": "1.5",
+  "openapsama_useautosens": "false",
+  "openapsma_max_basal": "4.2",
+  "openapsmb_max_iob": "10.0",
+  "overview_dashboard_extended_metrics": "false",
+  "overview_show_hybrid_aimi_pulse": "false",
+  "overview_use_dashboard": "false",
+  "overview_vico_bg_reading_tint": "theme",
+  "overview_vico_chart_backdrop": "theme",
+  "patch_expiration": "false",
+  "patch_id": "46",
+  "patch_primed_flag": "true",
+  "patch_start_time": "1779216953000",
+  "pp_ISF_weight": "0.005",
+  "profile_switch_last_synced_id": "1",
+  "protection_timeout": "1",
+  "pump_expiry_warning_hour": "72",
+  "pump_state": "32",
+  "pump_time_zone_offset": "120",
+  "pump_unreachable_threshold": "30",
+  "pump_warning_notification": "true",
+  "quick_launch_actions": [
+    {
+      "type": "insulin"
+    },
+    {
+      "type": "plugin",
+      "id": "OpenAPSAIMIPlugin"
+    },
+    {
+      "type": "plugin",
+      "id": "MedtrumPlugin"
+    },
+    {
+      "type": "site_rotation"
+    },
+    {
+      "type": "cgm_xdrip"
+    },
+    {
+      "type": "automation",
+      "id": "a4c23143-1c76-4893-af3e-84be82beb4c5"
+    },
+    {
+      "type": "automation",
+      "id": "190694c9-131d-4fab-b2dd-b14f622358d1"
+    },
+    {
+      "type": "plugin",
+      "id": "XdripSourcePlugin"
+    },
+    {
+      "type": "quick_launch_config"
+    }
+  ],
+  "raise_urgent_alarms_as_android_notification": "true",
+  "rangetodisplay": "6",
+  "resistance_lowers_target": "false",
+  "scan_on_connection_error": "false",
+  "sensitivity_raises_target": "false",
+  "settings_protection": "0",
+  "show_calibration_button": "false",
+  "show_carbs_button": "false",
+  "show_cgm_button": "true",
+  "show_insulin_button": "true",
+  "show_notes_entry_dialogs": "true",
+  "show_treatment_button": "false",
+  "show_wizard_button": "false",
+  "simple_mode": "false",
+  "site_rotation_manage_cgm": "true",
+  "site_rotation_manage_pump": "true",
+  "site_rotation_user_profile": "0",
+  "skin": "app.aaps.plugins.main.skins.SkinMinimal",
+  "smbinterval": "3",
+  "smbmaxminutes": "30",
+  "sn_input": "E98D7E39",
+  "startupwizard_processed": "true",
+  "statuslights_bage_critical": "240",
+  "statuslights_bage_warning": "216",
+  "statuslights_bat_critical": "5",
+  "statuslights_bat_warning": "25",
+  "statuslights_cage_critical": "72",
+  "statuslights_cage_warning": "48",
+  "statuslights_iage_critical": "144",
+  "statuslights_iage_warning": "72",
+  "statuslights_res_critical": "25",
+  "statuslights_res_warning": "50",
+  "statuslights_sage_critical": "336",
+  "statuslights_sage_warning": "312",
+  "statuslights_sbat_critical": "20",
+  "statuslights_sbat_warning": "40",
+  "sw_version": "1.80.83",
+  "synced_sequence_number": "211",
+  "temp_target_presets": [
+    {
+      "id": "eatingsoon",
+      "reason": "Eating Soon",
+      "targetValue": 81,
+      "duration": 5400000,
+      "isDeletable": false
+    },
+    {
+      "id": "activity",
+      "reason": "Activity",
+      "targetValue": 153,
+      "duration": 7200000,
+      "isDeletable": false
+    },
+    {
+      "id": "hypo",
+      "reason": "Hypo",
+      "targetValue": 160.20000000000002,
+      "duration": 7200000,
+      "isDeletable": false
+    }
+  ],
+  "treatmentssafety_maxbolus": "5.0",
+  "treatmentssafety_maxcarbs": "100",
+  "uamsmbmaxminutes": "15",
+  "ukf_last_processed_timestamp": "1779282983400",
+  "ukf_learned_r": "17.67288",
+  "ukf_sensor_change_timestamp": "1778914769937",
+  "units": "mmol",
+  "use_bolus_advisor": "false",
+  "use_bolus_reminder": "false",
+  "use_dark_mode": "system",
+  "use_dynamic_sensitivity": "true",
+  "use_smb": "true",
+  "use_uam": "true",
+  "virtualpump_type": "Generic AAPS",
+  "virtualpump_uploadstatus": "true",
+  "wear_custom_watchface_autorization": "true",
+  "wear_cwf_author_version": "1.3",
+  "wear_cwf_filename": "CenterGraph",
+  "wear_cwf_watchface_name": "Center Graph",
+  "wear_notifySMB": "true",
+  "wearcontrol": "true",
+  "wearwizard_bg": "true",
+  "wearwizard_cob": "true",
+  "wearwizard_iob": "true",
+  "wearwizard_trend": "true",
+  "wearwizard_tt": "true",
+  "wizard_calculation_visible": "true",
+  "wizard_correction_percent": "true",
+  "wizard_include_cob": "false",
+  "wizard_include_trend_bg": "true",
+  "xdrip_carbs_last_synced_id": "1",
+  "xdrip_glucose_value_last_sync": "47",
+  "xdrip_send_status": "false",
+  "xdrip_therapy_event_last_sync": "3",
+  "xdripstatus_detailediob": "true",
+  "xdripstatus_showbgi": "true"
+}
