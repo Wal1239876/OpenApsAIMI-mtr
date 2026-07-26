@@ -114,11 +114,14 @@ class InsulinManagementViewModel @Inject constructor(
             val insulins = insulinManager.insulins.map { it.deepClone() }
             val activeICfg = profileFunction.getProfile()?.iCfg
             val activeLabel = activeICfg?.insulinLabel
-            val activeConcentration = activeICfg?.concentration ?: 1.0  // Only insulin with Current Active concentration can be set from Insulin Management
+            // Only insulin with the currently-active concentration can be activated from Insulin Management.
+            // null = no/unknown active profile → never matches a real concentration (avoids a defaulted 1.0
+            // masquerading as U100 and lighting the Activate FAB for a just-saved U100 card).
+            val activeConcentration = activeICfg?.concentration
             val currentIndex = (if (reload) insulinManager.insulinIndex(activeICfg) else targetIndex ?: uiState.value.currentCardIndex)
                 .coerceIn(0, (insulins.size - 1).coerceAtLeast(0))
             val currentICfg = insulins.getOrNull(currentIndex)
-            val template = currentICfg?.let { cfg -> InsulinType.fromPeak(cfg.insulinPeakTime) }
+            val template = currentICfg?.let { cfg -> resolveEditorTemplate(cfg) }
             val defaultNickname = template?.let { rh.gs(it.label) } ?: ""
             val editorNickname = currentICfg?.insulinNickname?.takeIf { it.isNotBlank() } ?: defaultNickname
             val autoNameEnabled = editorNickname == defaultNickname || autoName
@@ -168,7 +171,7 @@ class InsulinManagementViewModel @Inject constructor(
         _uiState.update {
             it.copy(
                 activeInsulinLabel = activeIcfg?.insulinLabel,
-                activeConcentration = activeIcfg?.concentration ?: 1.0
+                activeConcentration = activeIcfg?.concentration
             )
         }
     }
@@ -186,7 +189,12 @@ class InsulinManagementViewModel @Inject constructor(
 
     private fun onExternalConfigChange() {
         val incoming = preferences.get(StringNonKey.InsulinConfiguration)
-        if (incoming == lastAppliedConfig) return // our own write echoing back
+        // Our own write echoing back. Two guards, because the store's change event can be delivered
+        // re-entrantly (Main.immediate) inside preferences.put() — before [lastAppliedConfig] is refreshed
+        // by the calling save/add. [insulinManager.lastStoredConfiguration] is stamped at the store choke
+        // point BEFORE the put, so it already matches a self-echo regardless of dispatch timing; a genuine
+        // external (client→master) push arrives via putRemote and never sets it, so it still falls through.
+        if (incoming == lastAppliedConfig || incoming == insulinManager.lastStoredConfiguration) return
         lastAppliedConfig = incoming
         // reload = true: the apply that triggered this ran insulinManager.loadSettings()/reloadInternalState()
         // on a background (WS) thread, so the in-memory list isn't reliably visible here — re-read the
@@ -221,11 +229,15 @@ class InsulinManagementViewModel @Inject constructor(
         viewModelScope.launch {
             insulinManager.loadSettings()
             val insulins = insulinManager.insulins.map { it.deepClone() }
-            val activeLabel = profileFunction.getProfile()?.iCfg?.insulinLabel
+            // Refresh label AND concentration from the same active iCfg so the two active-* fields can
+            // never describe different insulins (the FAB gate reads activeConcentration, isCurrentActive
+            // reads activeInsulinLabel).
+            val activeICfg = profileFunction.getProfile()?.iCfg
             _uiState.update {
                 it.copy(
                     insulins = insulins,
-                    activeInsulinLabel = activeLabel
+                    activeInsulinLabel = activeICfg?.insulinLabel,
+                    activeConcentration = activeICfg?.concentration
                 )
             }
         }
@@ -243,7 +255,7 @@ class InsulinManagementViewModel @Inject constructor(
     private fun applyCardSwitch(index: Int) {
         val insulins = uiState.value.insulins
         val iCfg = insulins.getOrNull(index) ?: return
-        val editorTemplate = InsulinType.fromPeak(iCfg.insulinPeakTime)
+        val editorTemplate = resolveEditorTemplate(iCfg)
         val editorNickname = iCfg.insulinNickname.takeIf { it.isNotBlank() } ?: rh.gs(editorTemplate.label)
         val defaultNickname = rh.gs(editorTemplate.label)
         val autoNameEnabled = editorNickname == defaultNickname
@@ -332,6 +344,13 @@ class InsulinManagementViewModel @Inject constructor(
     }
 
     fun updateEditorPeak(peakMinutes: Int) {
+        // Keep inhaled identity when editing peak — fromPeak() only matches the exact
+        // OREF_INHALED_AFREZZA peak (40) and would otherwise collapse to OREF_FREE_PEAK.
+        val currentTemplate = uiState.value.editorTemplate
+        if (currentTemplate?.isInhaled == true) {
+            _uiState.update { it.copy(editorPeakMinutes = peakMinutes) }
+            return
+        }
         val editorTemplate = InsulinType.fromPeak(peakMinutes.toLong() * 60_000L)
         _uiState.update {
             it.copy(
@@ -410,7 +429,7 @@ class InsulinManagementViewModel @Inject constructor(
         editedICfg.setDia(state.editorDiaHours)
         editedICfg.setPeak(state.editorPeakMinutes)
 
-        // Validation — inhaled insulin (Afrezza) uses shorter DIA limits
+        // Validation — inhaled insulin (Afrezza) uses shorter DIA / Peak limits
         val isInhaled = state.editorTemplate?.isInhaled == true
         val minDia = if (isInhaled) hardLimits.minDiaInhaled() else hardLimits.minDia()
         val maxDia = if (isInhaled) hardLimits.maxDiaInhaled() else hardLimits.maxDia()
@@ -418,8 +437,10 @@ class InsulinManagementViewModel @Inject constructor(
             showSnackbar(rh.gs(CoreUiR.string.value_out_of_hard_limits, rh.gs(CoreUiR.string.insulin_dia), editedICfg.dia))
             return false
         }
-        if (editedICfg.peak < hardLimits.minPeak() || editedICfg.peak > hardLimits.maxPeak()) {
-            showSnackbar(rh.gs(CoreUiR.string.value_out_of_hard_limits, rh.gs(CoreUiR.string.insulin_peak), editedICfg.peak))
+        val minPeak = if (isInhaled) hardLimits.minPeakInhaled() else hardLimits.minPeak()
+        val maxPeak = if (isInhaled) hardLimits.maxPeakInhaled() else hardLimits.maxPeak()
+        if (editedICfg.peak < minPeak || editedICfg.peak > maxPeak) {
+            showSnackbar(rh.gs(CoreUiR.string.value_out_of_hard_limits, rh.gs(CoreUiR.string.insulin_peak), editedICfg.peak.toDouble()))
             return false
         }
 
@@ -565,5 +586,30 @@ class InsulinManagementViewModel @Inject constructor(
             hardLimits.minDia()..hardLimits.maxDia()
         }
     }
-    fun peakRange(): ClosedFloatingPointRange<Double> = hardLimits.minPeak().toDouble()..hardLimits.maxPeak().toDouble()
+
+    fun peakRange(): ClosedFloatingPointRange<Double> {
+        val isInhaled = uiState.value.editorTemplate?.isInhaled == true
+        return if (isInhaled) {
+            hardLimits.minPeakInhaled().toDouble()..hardLimits.maxPeakInhaled().toDouble()
+        } else {
+            hardLimits.minPeak().toDouble()..hardLimits.maxPeak().toDouble()
+        }
+    }
+
+    /**
+     * Resolve editor template from persisted ICfg.
+     * ICfg does not store an inhaled discriminant — [InsulinType.fromPeak] only matches the
+     * exact enum peak. Edited Afrezza peaks are recovered when peak is in the inhaled range
+     * and DIA is outside regular pump limits but inside inhaled limits (same heuristic as
+     * ProfileSealed.validateSemantic).
+     */
+    private fun resolveEditorTemplate(iCfg: ICfg): InsulinType {
+        val byPeak = InsulinType.fromPeak(iCfg.insulinPeakTime)
+        if (byPeak.isInhaled) return byPeak
+        val peakOk = iCfg.peak in hardLimits.minPeakInhaled()..hardLimits.maxPeakInhaled()
+        val diaLooksInhaled = iCfg.dia !in hardLimits.minDia()..hardLimits.maxDia() &&
+            iCfg.dia in hardLimits.minDiaInhaled()..hardLimits.maxDiaInhaled()
+        if (peakOk && diaLooksInhaled) return InsulinType.OREF_INHALED_AFREZZA
+        return byPeak
+    }
 }
