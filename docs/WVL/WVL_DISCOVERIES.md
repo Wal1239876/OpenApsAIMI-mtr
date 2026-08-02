@@ -1977,6 +1977,15 @@ Relevance:
 
 **Wat is het?**
 
+Type 3c diabetes (also known as **pancreatogenic diabetes**) is a form of diabetes caused by structural damage or disease of the pancreas, rather than autoimmune destruction (Type 1) or insulin resistance (Type 2).
+
+### Key Characteristics
+
+* **Underlying Causes:** Typically triggered by conditions that damage the pancreas, such as chronic pancreatitis, pancreatic cancer, pancreatic surgery, cystic fibrosis, or hemochromatosis.
+* **Dual Failure:** Because the damaged pancreas cannot function properly, patients usually suffer from a lack of both **insulin** (leading to high blood sugar) and **digestive enzymes** (leading to malabsorption and nutritional deficiencies).
+* **"Brittle" and Unstable:** T3c diabetes is notoriously difficult to manage. It is frequently referred to as "brittle diabetes" **because pients experience extreme, unpredictable, and rapid day-to-day or hour-to-hour fluctuations between severe high and dangerous low blood sugar levels.**
+* **Lack of Counter-Regulation:** Unlike other forms of diabetes, patients often lack *glucagon* (the hormone that raises blood sugar when it drops), making sudden hypoglycemic episodes harder for the body to correct on its own. 
+
 * Een extra **veiligheidsrem** voor mensen die zeer gevoelig zijn voor insuline of snel hypo's krijgen.
 * AIMI wordt daardoor **voorzichtiger** met insuline.
 
