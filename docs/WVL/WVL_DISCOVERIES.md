@@ -71,6 +71,30 @@ This section is for user-applied settings changes over time, so they can be trac
 
 ### Other settings
 - Add future setting changes here with a timestamp and a short description.
+- 2026-08-02 — Legacy setting `openaps_smb_min_5m_carbimpact` was historically used in older OpenAPS/AMA-style SMB logic as a minimum floor for inferred carb impact, preventing very small meal-related BG effects from being treated as negligible.
+- 2026-08-02 — Current AIMI implementation does not use this setting in the main calculation path; the AIMI plugin passes `min_5m_carbimpact = 0.0` and marks it as "not used" in the code, so the value in user settings is effectively ignored by AIMI today.
+
+### Summary of recent changes and rationale
+- 2026-08-02 — Working summary of the recent tuning changes and the reasoning behind them.
+  My question:
+  I experience overcorrections again. Perhaps because my days in the weekend go different ???
+And still I see that when the rise of my BG is already flattening down that aimi decides to give pretty large SMB.
+During the daytime its hard to correct this with holding back the basal because then its pretty low for me (0,25 at 16:00)
+
+  Answer MTR:
+  You have an option to make it more gentle on the queue in autodrive
+
+  Actions:
+- AutoDrive max basal: 6 -> 4.5 U/h. Rationale: reduce sustained basal-side exposure and prolonged high temp basal pressure without broadly breaking meal control.
+-  turned off HTR hyper trajectory SMB release. Rationale: This makes the system less willing to act with full authority on a belief-driven decision.
+It is a good “less aggressive” lever if you want the loop to be more hesitant.
+
+- earlier
+- DynamicISF Adjustment Factor: 200 -> 100. Rationale: reduce amplified adaptive correction aggressiveness, reduce delayed braking, and limit late steep drops caused by over-interpretation of rising or flattening curves.
+- CombinedDelta: 1 -> 2. Rationale: require more confirmed rise before AutoDrive escalates, which should reduce false-positive acceleration handling on Libre2 lag/noise.
+
+- DynISF trajectory tuning: switched from On to Off in app settings. Rationale: keep the system more conservative while the current architecture still appears too willing to escalate on changing day structure and flattening curves.
+- Why these changes were grouped together: the observed issue pattern was not only “too much SMB,” but rather cumulative insulin exposure from AutoDrive/adaptive basal persistence plus delayed braking. The changes therefore target the escalation and persistence layers first, not only the final SMB size.
 
 ### AutoDrive: HTR + RBT
 - HTR (Hyper Trajectory SMB Release) and RBT (Recursive Belief Tree) are both part of the AutoDrive decision stack.
@@ -78,6 +102,9 @@ This section is for user-applied settings changes over time, so they can be trac
 - RBT is the belief-gating layer: it unfolds nested belief leaves each loop tick, evaluates credibility and authority, and can cap or suppress SMB/TBR when the signal is weak or conflicting.
 - Together, they make AutoDrive more conditional: HTR can raise the SMB floor when the trajectory is credible, while RBT can still hold back or constrain the action if the underlying belief is not robust enough.
 - The aggressive HTR setting raises HTR SMB floors by about 15% when the scenario confirms a hyper rise.
+- 2026-08-02 — User-reported runtime pattern: overcorrections recur when the day structure changes, especially on weekend-style days, and the problem is particularly visible when BG is already flattening or peaking yet AIMI still decides to deliver a relatively large SMB.
+- This supports the interpretation that the issue is not only raw SMB size, but also the fact that the AutoDrive/HTR layer can still treat a flattening curve as credible enough for a late correction when the daily routine changes.
+- The user also noted that during daytime it is hard to compensate by holding basal back because the basal is already very low (for example around 0.25 U/h at 16:00), which reinforces the hypothesis that the main problem is cumulative exposure from AutoDrive/adaptive basal persistence rather than a simple need for more basal reduction.
 
 ---
 
