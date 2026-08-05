@@ -74,6 +74,19 @@ This section is for user-applied settings changes over time, so they can be trac
 - 2026-08-02 — Legacy setting `openaps_smb_min_5m_carbimpact` was historically used in older OpenAPS/AMA-style SMB logic as a minimum floor for inferred carb impact, preventing very small meal-related BG effects from being treated as negligible.
 - 2026-08-02 — Current AIMI implementation does not use this setting in the main calculation path; the AIMI plugin passes `min_5m_carbimpact = 0.0` and marks it as "not used" in the code, so the value in user settings is effectively ignored by AIMI today.
 
+#### SMB tail-damping floor 
+- Lowering the SMB tail-damping floor makes the guard stronger.
+- Raising the floor makes the guard weaker.
+
+- 0.70 = strongest damping (up to −30% SMB at tail)
+- 0.85 = default damping (up to −15% SMB at tail)
+- 0.92 = lightest damping (up to −8% SMB at tail)
+- 1.0 = guard effectively disabled
+
+Practical effect
+Lower floor → more SMB reduction when insulin tail/IOB is high → smoother, more conservative, better hypo protection
+Higher floor → less SMB reduction on the tail → more aggressive SMB delivery, better at chasing long rises
+
 ### Summary of recent changes and rationale
 - 2026-08-02 — Working summary of the recent tuning changes and the reasoning behind them.
   My question:
