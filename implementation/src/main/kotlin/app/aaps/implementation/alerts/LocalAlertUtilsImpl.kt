@@ -11,15 +11,18 @@ import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.di.ApplicationScope
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
+import app.aaps.core.interfaces.notifications.NotificationAction
 import app.aaps.core.interfaces.notifications.NotificationId
 import app.aaps.core.interfaces.notifications.NotificationManager
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.profile.ProfileFunction
+import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.smsCommunicator.SmsCommunicator
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.IntKey
+import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.extensions.asAnnouncement
 import app.aaps.core.ui.R
@@ -40,6 +43,7 @@ class LocalAlertUtilsImpl @Inject constructor(
     private val rh: ResourceHelper,
     private val activePlugin: ActivePlugin,
     private val profileFunction: ProfileFunction,
+    private val profileUtil: ProfileUtil,
     private val smsCommunicator: SmsCommunicator,
     private val config: Config,
     private val persistenceLayer: PersistenceLayer,
@@ -150,5 +154,124 @@ class LocalAlertUtilsImpl @Inject constructor(
         } else if (dateUtil.isOlderThan(bgReading.timestamp, 5).not()) {
             notificationManager.dismiss(NotificationId.BG_READINGS_MISSED)
         }
+    }
+
+    /**
+     * Alarm threshold in mg/dL, the unit every glucose value in this class is expressed in.
+     *
+     * MUST stay [Preferences.getRaw]: `Preferences.get(UnitDoublePreferenceKey)` converts to the
+     * user's display units, so on an mmol/L phone a 250 mg/dL hyper threshold came back as 13.9 and
+     * was compared against mg/dL values. Every reading then looked "high" (alarm every 30 min at any
+     * glucose), while the hypo threshold came back as 3.9 and no reading could ever reach it — the
+     * hypo alarm never fired at all. mg/dL users saw nothing, because for them the conversion is
+     * the identity.
+     */
+    private fun thresholdMgdl(key: UnitDoubleKey): Double = preferences.getRaw(key)
+
+    override suspend fun checkGlucoseAlerts() {
+        val last = persistenceLayer.getLastGlucoseValue() ?: return
+        val now = dateUtil.now()
+        // Freshness guard: never alarm on stale data — the stale-data alarm owns that case.
+        if (last.timestamp + missedReadingsThreshold() < now) return
+
+        checkHypoAlert(last.value, now)
+        checkHyperAlert(last.value, now)
+        checkRapidFallAlert(last.value, now)
+    }
+
+    private fun checkHypoAlert(bgMgdl: Double, now: Long) {
+        if (!preferences.get(BooleanKey.AlertHypo)) return
+        val threshold = thresholdMgdl(UnitDoubleKey.AlertHypoThreshold)
+        if (bgMgdl <= threshold) {
+            if (preferences.get(LocalAlertLongKey.NextHypoAlarm) < now) {
+                preferences.put(LocalAlertLongKey.NextHypoAlarm, now + HYPO_REALARM_MS)
+                notificationManager.post(
+                    NotificationId.BG_HYPO,
+                    R.string.alert_hypo_message,
+                    profileUtil.fromMgdlToStringWithUnits(bgMgdl),
+                    soundRes = R.raw.alarm,
+                    actions = listOf(
+                        // "Treated": the user ate carbs, so hold the alarm long enough for them to
+                        // work instead of re-alarming after the shorter HYPO_REALARM_MS.
+                        NotificationAction(R.string.alert_hypo_treated) { snoozeHypoAfterTreatment() },
+                        // Plain snooze, unchanged: silence this alarm without claiming a treatment.
+                        NotificationAction(R.string.snooze) { }
+                    )
+                )
+            }
+        } else if (bgMgdl >= threshold + HYPO_HYSTERESIS_MGDL) {
+            notificationManager.dismiss(NotificationId.BG_HYPO)
+            preferences.put(LocalAlertLongKey.NextHypoAlarm, 0L)
+        }
+    }
+
+    /**
+     * "Hypo treated" action: hold the hypo alarm for [HYPO_TREATED_SNOOZE_MS] — about the time carbs
+     * need to raise glucose — and clear the current alert.
+     *
+     * Only silences: the alarm re-arms by itself once the snooze runs out and glucose is still low,
+     * and the recovery branch of [checkHypoAlert] clears the snooze as soon as glucose is back above
+     * the threshold.
+     */
+    override fun snoozeHypoAfterTreatment() {
+        preferences.put(LocalAlertLongKey.NextHypoAlarm, dateUtil.now() + HYPO_TREATED_SNOOZE_MS)
+        notificationManager.dismiss(NotificationId.BG_HYPO)
+        aapsLogger.debug(LTag.CORE, "Hypo alarm snoozed after treatment for ${T.msecs(HYPO_TREATED_SNOOZE_MS).mins()} min")
+    }
+
+    private fun checkHyperAlert(bgMgdl: Double, now: Long) {
+        if (!preferences.get(BooleanKey.AlertHyper)) return
+        val threshold = thresholdMgdl(UnitDoubleKey.AlertHyperThreshold)
+        if (bgMgdl >= threshold) {
+            if (preferences.get(LocalAlertLongKey.NextHyperAlarm) < now) {
+                preferences.put(LocalAlertLongKey.NextHyperAlarm, now + HYPER_REALARM_MS)
+                notificationManager.post(NotificationId.BG_HYPER, R.string.alert_hyper_message, profileUtil.fromMgdlToStringWithUnits(bgMgdl))
+            }
+        } else if (bgMgdl <= threshold - HYPER_HYSTERESIS_MGDL) {
+            notificationManager.dismiss(NotificationId.BG_HYPER)
+            preferences.put(LocalAlertLongKey.NextHyperAlarm, 0L)
+        }
+    }
+
+    private suspend fun checkRapidFallAlert(bgMgdl: Double, now: Long) {
+        if (!preferences.get(BooleanKey.AlertRapidFall)) return
+        val windowMinutes = preferences.get(IntKey.AlertRapidFallWindow)
+        val readings = persistenceLayer.getBgReadingsDataFromTime(now - T.mins(windowMinutes.toLong()).msecs(), ascending = true)
+        // Need at least two readings spanning the window; otherwise a data gap makes the slope meaningless.
+        if (readings.size < 2) return
+        val drop = readings.first().value - readings.last().value
+        val dropThreshold = thresholdMgdl(UnitDoubleKey.AlertRapidFallDrop)
+        if (drop >= dropThreshold) {
+            if (preferences.get(LocalAlertLongKey.NextRapidFallAlarm) < now) {
+                preferences.put(LocalAlertLongKey.NextRapidFallAlarm, now + RAPID_FALL_REALARM_MS)
+                notificationManager.post(
+                    NotificationId.BG_RAPID_FALL,
+                    R.string.alert_rapid_fall_message,
+                    profileUtil.fromMgdlToStringWithUnits(drop),
+                    windowMinutes,
+                    soundRes = R.raw.alarm
+                )
+            }
+        } else if (drop <= dropThreshold / 2.0) {
+            // Slope has flattened — clear and re-arm for the next fall episode.
+            notificationManager.dismiss(NotificationId.BG_RAPID_FALL)
+            preferences.put(LocalAlertLongKey.NextRapidFallAlarm, 0L)
+        }
+    }
+
+    companion object {
+
+        // Re-alarm throttles: while a condition persists, re-post at most this often (anti-spam).
+        private val HYPO_REALARM_MS = T.mins(15).msecs()
+
+        /** Hold after the user reported treating a hypo — roughly how long carbs need to work. */
+        private val HYPO_TREATED_SNOOZE_MS = T.mins(20).msecs()
+
+        private val HYPER_REALARM_MS = T.mins(30).msecs()
+        private val RAPID_FALL_REALARM_MS = T.mins(15).msecs()
+
+        // Hysteresis bands (mg/dL): dismiss only once the value has clearly left the alarm zone.
+        private const val HYPO_HYSTERESIS_MGDL = 5.0
+        private const val HYPER_HYSTERESIS_MGDL = 10.0
     }
 }

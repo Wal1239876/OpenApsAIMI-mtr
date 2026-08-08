@@ -39,7 +39,6 @@ import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.insulin.ConcentrationHelper
-import app.aaps.core.interfaces.insulin.Insulin
 import app.aaps.core.interfaces.plugin.PluginBase
 import app.aaps.core.interfaces.plugin.PluginDescription
 import app.aaps.core.interfaces.profile.EffectiveProfile
@@ -106,6 +105,7 @@ import javax.inject.Provider
 import javax.inject.Singleton
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.floor
+import kotlin.math.max
 import app.aaps.plugins.aps.openAPSAIMI.ISF.IsfBlender
 import app.aaps.plugins.aps.openAPSAIMI.pkpd.IsfFusion
 import app.aaps.plugins.aps.openAPSAIMI.pkpd.IsfFusionBounds
@@ -183,7 +183,6 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
     private val aimiBackupManager: AimiBackupManager, // ?? Cloud Backup Manager (Force Init)
     private val aimiMlTrainingScheduler: AimiMlTrainingScheduler,
     private val storageHelper: AimiStorageHelper,
-    private val insulin: Insulin,
     private val ch: ConcentrationHelper,
     private val trajectoryHistoryProvider: TrajectoryHistoryProvider,
     private val trajectoryGuard: TrajectoryGuard,
@@ -382,7 +381,8 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
     override var lastAPSRun: Long = 0
     override val algorithm = APSResult.Algorithm.AIMI
     override var lastAPSResult: APSResult? = null
-    override fun supportsDynamicIsf(): Boolean = preferences.get(BooleanKey.ApsUseDynamicSensitivity)
+    override fun usingDynamicIsf(): Boolean = preferences.get(BooleanKey.ApsUseDynamicSensitivity)
+    override fun offersDynamicSensitivity(): Boolean = true
     private val pkpdIntegration = PkPdIntegration(preferences)
     private var lastPkpdScale: Double = 1.0
     // Dans votre classe principale (ou plugin), vous pouvez d?clarer :
@@ -520,7 +520,7 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
                 timeSinceLastBolus = pkpdWindowSinceDoseMinForPkpd,
                 cobNow = mealCobForPkpd,
                 effectiveProfile = profile,
-                historicalInsulinPeakMinutes = insulin.iCfg.peak.coerceAtLeast(35),
+                historicalInsulinPeakMinutes = profile.iCfg.peak.coerceAtLeast(35),
             )
             val orbit = StableOrbit.fromProfile(
                 targetBg = targetBgMgdl,
@@ -535,7 +535,7 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
             val mismatchNudge = if (geometryNudge == 0.0) {
                 TrajectoryPeakMismatchScorer.minutesNudgeFromHistoryOrZero(
                     history = history,
-                    insulinPeakMinutes = insulin.iCfg.peak.coerceAtLeast(35),
+                    insulinPeakMinutes = profile.iCfg.peak.coerceAtLeast(35),
                     lastBolusAgeMinutes = pkpdWindowSinceDoseMinForPkpd,
                     cobGrams = mealCobForPkpd,
                 )
@@ -549,27 +549,60 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
     }
 
     @SuppressLint("DefaultLocale")
+    /**
+     * Reads the newest cache entry and records **which source was used** in [IsfSourceTelemetry].
+     *
+     * Diagnostic only — it does not change which value is returned. The cache key is
+     * `bucketStart + glucose` (see the warm-up loop), so `valueAt(size - 1)` returns the entry of
+     * the highest glucose in the newest 30-minute bucket, not the most recent one. The bucket start
+     * is recovered from the key to report the age of the value actually used.
+     *
+     * See `docs/adr/0003-dynisf-cache-read-path.md`.
+     */
+    private fun readNewestDynIsfAndRecordSource(now: Long): Double? {
+        val entry = synchronized(dynIsfCacheLock) {
+            val size = dynIsfCache.size()
+            if (size == 0) null else dynIsfCache.keyAt(size - 1) to dynIsfCache.valueAt(size - 1)
+        }
+        if (entry == null) {
+            IsfSourceTelemetry.record(IsfSourceTelemetry.SOURCE_PROFILE_FALLBACK, null, null)
+            return null
+        }
+        val (key, value) = entry
+        val bucketMs = T.mins(30).msecs()
+        val bucketStart = key - key % bucketMs
+        // The key is `bucketStart + glucose`, so the remainder identifies the reading this value was
+        // computed for. Two entries of the same bucket share an age but not a key.
+        val cacheGlucose = key % bucketMs
+        val ageMs = (now - bucketStart).coerceAtLeast(0L)
+        val source =
+            if (ageMs > IsfSourceTelemetry.STALE_AFTER_MS) IsfSourceTelemetry.SOURCE_DYNAMIC_STALE
+            else IsfSourceTelemetry.SOURCE_DYNAMIC_FRESH
+        IsfSourceTelemetry.record(source, value, ageMs, cacheKey = key, cacheGlucoseMgdl = cacheGlucose)
+        return value
+    }
+
     override fun getIsfMgdl(profile: Profile, caller: String): Double? {
         val start = dateUtil.now()
         val multiplier = (profile as? ProfileSealed.EPS)?.value?.originalPercentage?.div(100.0)
-            ?: return null
+            ?: run {
+                IsfSourceTelemetry.record(IsfSourceTelemetry.SOURCE_NO_EPS, null, null)
+                return null
+            }
 
         if (Looper.myLooper() == Looper.getMainLooper()) {
             // Keep UI path non-blocking; use latest cache and refresh in background.
-            val cached = synchronized(dynIsfCacheLock) {
-                if (dynIsfCache.size() == 0) null else dynIsfCache.valueAt(dynIsfCache.size() - 1)
-            }
+            val cached = readNewestDynIsfAndRecordSource(start)
             aimiPluginIoScope.launch { runCatching { calculateVariableIsf(start) } }
             return cached?.let { it * multiplier }
         }
 
-        val cached = synchronized(dynIsfCacheLock) {
-            if (dynIsfCache.size() == 0) null else dynIsfCache.valueAt(dynIsfCache.size() - 1)
-        }
+        val cached = readNewestDynIsfAndRecordSource(start)
         aimiPluginIoScope.launch { runCatching { calculateVariableIsf(start) } }
         profiler.log(
             LTag.APS,
-            "getIsfMgdl() CACHE $cached ${dateUtil.dateAndTimeAndSecondsString(start)} $caller",
+            "getIsfMgdl() CACHE $cached src=${IsfSourceTelemetry.lastSource} " +
+                "age=${IsfSourceTelemetry.lastAgeMs} ${dateUtil.dateAndTimeAndSecondsString(start)} $caller",
             start
         )
         return cached?.let { it * multiplier }
@@ -764,13 +797,21 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
         )
         aapsLogger.debug(LTag.APS, "Adaptive ISF via IsfAdjustmentEngine: $isfAdj (tddEma=$tddEma, sipp=$sippConfidence, var=$kalmanVarProxy)")
 
-        // 8) Combine les deux rapides par m?diane robuste (r?sistant aux outliers)
-        val fastMedian = listOf(kalmanFastIsf, isfAdj).sorted()[1]
+        // 8) Combine the two fast estimators.
+        //
+        // This was written as `listOf(kalmanFastIsf, isfAdj).sorted()[1]` and described as a "robust
+        // median". Two values have no median: `sorted()[1]` is the maximum. The behaviour is kept
+        // because the maximum is the **conservative** choice here — a higher ISF means the loop
+        // assumes insulin acts more strongly, so it doses less — but it is now named for what it is.
+        //
+        // Whether max, min or mean is right is a calibration question, not a naming one. It needs the
+        // replay corpus and a shadow period, so it is deliberately not changed here.
+        val fastConservative = max(kalmanFastIsf, isfAdj)
 
         // 9) Blend final (socle lent vs rapide), avec rate-limit temporel de IsfBlender
         var blended = isfBlender.blend(
             fusedIsf = fusedSlowIsf,
-            kalmanIsf = fastMedian,
+            kalmanIsf = fastConservative,
             trustFast = kalmanTrustProxy,
             nowMs = System.currentTimeMillis()
         )
@@ -806,13 +847,35 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
         )
         blended = trajectoryTuning.isfMgdlPerU
 
-        // ?? PHYSIO MODULATION (ISF) ? apr?s trajectoire
-        if (physioMultsNullable != null && physioMultsNullable.isfFactor != 1.0) {
-            blended *= physioMultsNullable.isfFactor
-            aapsLogger.debug(LTag.APS, "?? DynISF modulated by Physio: x${physioMultsNullable.isfFactor} -> $blended")
-        }
+        // 🏥 The physiological factor is NOT applied here.
+        //
+        // It used to be, and the callers applied it again on their own value, so `profile.sens`
+        // carried it twice (0.72–1.32 instead of 0.85–1.15) while `profile.variable_sens` carried it
+        // once — two fields meant to hold the same quantity, differing by one factor.
+        //
+        // What this function returns is the **estimated** sensitivity. The physiological factor is a
+        // situational modulation, applied once by each caller on a fresh value; keeping it out of the
+        // cached estimate also stops a 30-minute-old factor from being frozen into it.
+        // See `docs/adr/0002-sensitivity-three-levels.md`.
 
         blended = blended.coerceIn(5.0, 300.0)
+
+        // Shadow only — nothing below reads this. Records what an **unconditional exit clamp**
+        // relative to the profile would produce. The chain's only relative bound today sits inside
+        // `DynIsfTrajectoryTuning`, behind gates that skip it; the absolute [5, 300] above is so wide
+        // it has never bound. See `docs/adr/0008-isf-decision-architecture.md`.
+        IsfSourceTelemetry.recordProfileRelativeShadow(blended, profileIsf)
+
+        // Diagnostic only: keep the intermediate terms so a support package can attribute the
+        // movement of the commanded sensitivity. See `docs/adr/0002-sensitivity-three-levels.md`.
+        IsfSourceTelemetry.recordComponents(
+            kalmanFastIsf = kalmanFastIsf,
+            isfAdjEngine = isfAdj,
+            fusedSlowIsf = fusedSlowIsf,
+            trustFast = kalmanTrustProxy,
+            dynamicFactor = dynamicFactor,
+            trajectoryMultiplier = trajectoryTuning.trajectoryMultiplier,
+        )
 
         aapsLogger.debug(LTag.APS, "Final DynISF: $blended")
         aapsLogger.debug(
@@ -913,9 +976,9 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
             targetBg = hardLimits.verifyHardLimits(tempTarget.target(), app.aaps.core.ui.R.string.temp_target_value, HardLimits.LIMIT_TEMP_TARGET_BG[0], HardLimits.LIMIT_TEMP_TARGET_BG[1])
         }
         val insulinDivisor = when {
-            insulin.iCfg.peak > 65 -> 55 // rapid peak: 75
-            insulin.iCfg.peak > 50 -> 65 // ultra rapid peak: 55
-            else                   -> 45 // lyumjev peak: 45
+            profile.iCfg.peak > 65 -> 55 // rapid peak: 75
+            profile.iCfg.peak > 50 -> 65 // ultra rapid peak: 55
+            else                  -> 45 // lyumjev peak: 45
         }
 
         var autosensResult = AutosensResult()
@@ -1001,17 +1064,15 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
             
             aapsLogger.debug(LTag.APS, "Adaptive ISF computed (source: $source): $variableSensitivity for BG: $currentBG, currentDelta: $currentDelta, predictedDelta: $predictedDelta")
 
-            // ?? Apply Physio ISF Modulation to Dynamic ISF (it might already be in calculateVariableIsf, but applying it if not fully wrapped)
-            // (calculateVariableIsf does apply physioMults internally before returning blended, 
-            // but if we fell back to profile ISF, we apply it here for safety)
-            if (source == "OFF" || calcSensitivity == null) {
-                if (physioMults.isfFactor != 1.0) {
-                    variableSensitivity *= physioMults.isfFactor
-                    aapsLogger.debug(LTag.APS, "?? LOOP: DynISF modulated: $variableSensitivity (x${physioMults.isfFactor})")
-                }
-                // Imposition des bornes
-                variableSensitivity = variableSensitivity.coerceIn(5.0, 300.0)
+            // 🏥 Physiological modulation, applied here on every path — `calculateVariableIsf` returns
+            // the estimate without it (see the note at its physio step). Previously this branch only
+            // ran on the fallback path, so the dynamic path ended up with the factor once in
+            // `variable_sens` and twice in `sens`.
+            if (physioMults.isfFactor != 1.0) {
+                variableSensitivity *= physioMults.isfFactor
+                aapsLogger.debug(LTag.APS, "🏥 LOOP: DynISF modulated: $variableSensitivity (x${physioMults.isfFactor})")
             }
+            variableSensitivity = variableSensitivity.coerceIn(5.0, 300.0)
             
             aapsLogger.debug(LTag.APS, "Final adaptive ISF after clamping: $variableSensitivity")
 
@@ -1147,7 +1208,7 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
             )
             val sitePeakShiftMinutes = TapSitePeakShift.minutesForSiteAge(computeCannulaSiteAgeDays())
             val peakGovernorForActivity = TapPeakGovernor.resolve(
-                insulinPeakMinutes = insulin.iCfg.peak,
+                insulinPeakMinutes = profile.iCfg.peak,
                 physioPeakShiftMinutes = physioMults.peakShiftMinutes,
                 sitePeakShiftMinutes = sitePeakShiftMinutes,
                 pkpdLearnedPeak = pkpdRuntimeForActivity?.params?.peakMin,
@@ -1263,13 +1324,22 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
                 parabolaMinutes = 0.0,
                 a0              = 0.0,
                 a1              = 0.0,
-                a2              = 0.0
+                a2              = 0.0,
+                // Propagate CGM source (G6/G7/One+/…) so AIMI lead stays G6-only
+                sourceSensor    = gs.sourceSensor
             )
             futureActivity = Round.roundTo(futureActivity, 0.0001)
             sensorLagActivity = Round.roundTo(sensorLagActivity, 0.0001)
             historicActivity = Round.roundTo(historicActivity, 0.0001)
             currentActivity = Round.roundTo(currentActivity, 0.0001)
             val tdd4D = tddCalculator.averageTDD(tddCalculator.calculate(4, allowMissingDays = false))
+            // Diagnostic only: capture the static profile ISF next to the command value written into
+            // `sens` below, so a support package can show the gap between the two.
+            // See `docs/adr/0002-sensitivity-three-levels.md`.
+            IsfSourceTelemetry.recordProfileStatic(
+                runCatching { profile.getProfileIsfMgdl() }.getOrNull()
+            )
+            IsfSourceTelemetry.recordPhysioFactor(physioMults.isfFactor)
             val oapsProfile = OapsProfileAimi(
                 dia = eff.iCfg.dia,
                 min_5m_carbimpact = 0.0, // not used
@@ -1846,6 +1916,9 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
             items = buildList {
                 add(BooleanKey.OApsAIMIT3cAdaptiveBasalEnabled)
                 add(BooleanKey.OApsAIMIBasalSlewLimitEnabled)
+                add(BooleanKey.OApsAIMIBasalChannelSafetyGuards)
+                add(BooleanKey.OApsAIMIBasalTerminalInvariants)
+                add(BooleanKey.OApsAIMIBasalProjectedError)
                 add(DoubleKey.OApsAIMIAdaptiveBasalMaxScaling)
                 add(DoubleKey.OApsAIMIGovernanceHypoRateEnter)
                 add(DoubleKey.OApsAIMIGovernanceHypoRateExit)
@@ -1873,6 +1946,11 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
             items = listOf(
                 BooleanKey.OApsAIMIT3cBrittleMode,
                 BooleanKey.OApsAIMIT3cAutodriveBasalAuthority,
+                BooleanKey.OApsAIMIT3cHyperBasalFloor,
+                BooleanKey.OApsAIMIT3cCfrdMode,
+                BooleanKey.OApsAIMIT3cCfrdExacerbationMode,
+                DoubleKey.OApsAIMIT3cCfrdLgsFloorMgdl,
+                DoubleKey.OApsAIMIT3cCfrdCobDelayMin,
                 DoubleKey.OApsAIMIT3cActivationThreshold,
                 DoubleKey.OApsAIMIT3cAggressiveness,
                 DoubleKey.OApsAIMIT3cAnticipationStrength,
@@ -2093,6 +2171,9 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
                 add(BooleanKey.OApsAIMIRecursiveBeliefShadow)
                 add(BooleanKey.OApsAIMIRecursiveBeliefAuthority)
                 add(BooleanKey.OApsAIMIRecursiveBeliefWavelet)
+                add(BooleanKey.OApsAIMITreeMealRiseFrontLoad)
+                add(BooleanKey.OApsAIMISensorConfidenceCgmFirst)
+                add(BooleanKey.OApsAIMIMealConfirmedEarlyRelease)
                 add(DoubleKey.OApsAIMIHyperEstablishedDevMgdl)
                 add(DoubleKey.OApsAIMIHyperDeepDevMgdl)
                 add(DoubleKey.autodriveMaxBasal)
