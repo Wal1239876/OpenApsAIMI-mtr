@@ -311,6 +311,44 @@ Instead:
   - delayed de-escalation,
   - adaptive amplification.
 
+### Circadian meal profile discovery
+- Confirmed code behaviour:
+  - `plugins/aps/src/main/kotlin/app/aaps/plugins/aps/openAPSAIMI/physio/CircadianMealProfileStore.kt` persists and loads `circadian_meal_profile.json`.
+  - The JSON stores learned per-slot meal timing and confidence for `breakfast`, `lunch`, `dinner`, `snack`, and `dawn`.
+  - Each slot has `*_center_hour` and `*_samples`.
+  - `CircadianMealProfileStore.priorForHour(hourOfDay)` computes a circadian meal prior, and `MealAbsorptionPhaseEngine` uses it as `chronoPrior`.
+- Runtime implications:
+  - explicit meal modes (`bfast`, `lunch`, `dinner`, `snack`, `highcarb`) update the profile through `observeMealWindow(...)`.
+  - AIMI Meal Advisor carb estimates update it through `observeEstimatedMeal(...)` when `OApsAIMILastEstimatedCarbs > 10g` and the estimate is fresh.
+  - Breakfast is weak until it has samples; `breakfast_samples = 0` means breakfast timing is still default-only.
+  - Dawn timing is tracked separately and helps distinguish hormonal/dawn rises from meal rises.
+- Practical note:
+  - the profile is an important learned timing bias, but not the only input to meal detection.
+  - manual editing is possible, but real meal logging is the safer and preferred way to train the profile.
+  - this confirms that meal announcements remain useful even though AIMI can still infer meals autonomously.
+- manually changed (2026-09-08)
+  {
+    "breakfast_center_hour": 7.75,
+    "breakfast_samples": 10,
+    "lunch_center_hour": 12.75,
+    "lunch_samples": 12,
+    "dinner_center_hour": 18.00,
+    "dinner_samples": 10,
+    "snack_center_hour": 15.25,
+    "snack_samples": 2,
+    "dawn_center_hour": 6.75,
+    "dawn_samples": 12
+  }
+    - Why these values
+      7.75 = 07:45, which is a reasonable average between 07:20 workdays and 08:00–09:00 weekends
+      12.75 = 12:45 for lunch
+      18.00 = 18:00 for dinner
+      15.25 = 15:15 for snack, since your snack timing is uncertain and more often mid-afternoon
+      6.75 = 06:45 for dawn, reflecting a before-standing-up effect
+
+    - Sample counts
+      Use 10–12 for stable meals so AIMI treats them as reasonably learned
+      Use a low count like 2 for snack because it is still uncertain
 ---
 
 # Status
