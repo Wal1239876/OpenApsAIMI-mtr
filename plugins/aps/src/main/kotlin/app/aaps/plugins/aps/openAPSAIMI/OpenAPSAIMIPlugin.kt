@@ -56,6 +56,7 @@ import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.HardLimits
 import app.aaps.core.interfaces.utils.Round
+import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.R as CoreKeysR
@@ -87,6 +88,7 @@ import app.aaps.plugins.aps.events.EventOpenAPSUpdateGui
 import app.aaps.plugins.aps.events.EventResetOpenAPSGui
 import app.aaps.plugins.aps.openAPS.TddStatus
 import app.aaps.plugins.aps.openAPSAIMI.ISF.DynIsfTrajectoryTuning
+import app.aaps.plugins.aps.openAPSAIMI.ISF.DynamicSensitivityPolicy
 import app.aaps.plugins.aps.openAPSAIMI.ISF.IsfAdjustmentEngine
 import app.aaps.plugins.aps.openAPSAIMI.physio.PhysioMultipliersMTR
 import app.aaps.plugins.aps.openAPSAIMI.physio.EndogenousPhaseHysteresis
@@ -188,6 +190,7 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
     private val trajectoryGuard: TrajectoryGuard,
     private val dynIsfTrajectoryTuning: DynIsfTrajectoryTuning,
     private val tpoOrchestrator: TpoOrchestrator,
+    private val fabricPrivacy: FabricPrivacy,
 ) : PluginBase(
     PluginDescription()
         .mainType(PluginType.APS)
@@ -690,32 +693,63 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
         val anchored = if (tdd24 > 0.1) 1800.0 / tdd24 else profileIsf
         return anchored.coerceIn(5.0, 400.0)
     }
-    private fun dynamicDeltaCorrectionFactor(delta: Double?, predicted: Double?, bg: Double?): Double {
-        if (delta == null || predicted == null || bg == null) return 1.0
-        val combinedDelta = (delta + predicted) / 2.0
-        return when {
-            // En cas d'hypoglyc?mie (delta n?gatif), on augmente progressivement l'ISF
-            combinedDelta < 0 -> {
-                val factor = exp(0.15 * abs(combinedDelta))
-                factor.coerceAtMost(1.4)
-            }
-            // En hyperglyc?mie : si BG est > 130, on applique une r?duction progressive
-            bg > 110.0        -> {
-                // On r?duit d?un certain pourcentage (ici jusqu?? 30%) en fonction de BG
-                val bgReduction = 1.0 - ((bg - 110.0) / (200.0 - 110.0)) * 0.5
-                // On combine ce facteur avec la r?ponse exponentielle bas?e sur combinedDelta si n?cessaire
-                if (combinedDelta > 10) {
-                    // Si le delta est important, on accentue la r?duction avec une r?ponse exponentielle
-                    val expFactor = exp(-0.3 * (combinedDelta - 10))
-                    minOf(expFactor, bgReduction)
-                } else {
-                    bgReduction
-                }
-            }
-
-            else              -> 1.0
-        }
-    }
+    /**
+     * Situational multiplier on the estimated sensitivity.
+     *
+     * ## What this used to do, and why it was wrong
+     *
+     * The hyperglycaemia arm carried two terms. The linear one reduced the sensitivity by up to half
+     * between BG 110 and 200 and kept going, with no lower bound: it reaches 0.0 at BG 290 and turns
+     * **negative** above it. The second term was an exponential in the rise rate,
+     * `exp(-0.3 * (combinedDelta - 10))`, which took over whenever the rise exceeded 10 mg/dL per
+     * 5 min — so the steeper the rise, the harder the sensitivity was crushed. At a combined delta of
+     * +26 it returns **0.0073**. Measured in production on 2026-08-14 at BG 186.6 rising +26.4:
+     * `isf_dynamic_factor` was 0.01, and the commanded sensitivity fell to **4.54 mg/dL/U** against a
+     * static profile of 30 — a factor of 6.6 — held only by the `coerceIn(5.0, 300.0)` at the exit of
+     * `calculateVariableIsf`. On 2026-08-12 at BG 290 the factor was measured at **-0.00**, and at
+     * BG 297 at **-0.04**. That absolute clamp, which ADR 0008 records as never binding, is the only
+     * thing standing between the pump and a negative sensitivity.
+     *
+     * Both terms are dose policy — "correct harder" — written inside the number every prediction, the
+     * MPC and `ControlBarrierShield` read. ADR 0008 says they belong in an urgency term applied at the
+     * dose terminal, not in `S`. This is step 3 of that migration, done for the rise arm only.
+     *
+     * ## What the corpus says the BG dependence actually is
+     *
+     * Insulin sensitivity was estimated from outcomes over **96 clean descents** (>= 30 min, >= 25
+     * mg/dL fall, no carbs on board, appearance rate below 0.30, at least 0.8 U absorbed), as
+     * `-dBG / insulin absorbed`. Endogenous glucose production is ignored, so every figure is a lower
+     * bound on the true sensitivity. Median by starting glucose:
+     *
+     * | starting BG | n  | median estimate | relative |
+     * |---|---|---|---|
+     * | 70-140      | 27 | 24.3 mg/dL/U | 1.00 |
+     * | 140-200     | 45 | 22.6 mg/dL/U | 0.93 |
+     * | 200-400     | 24 | 18.7 mg/dL/U | 0.77 |
+     *
+     * So this patient really is less sensitive when high — by about **x1.3 across the whole range**.
+     * The old code applied up to x137 between a fall and a steep rise. The linear coefficient is now
+     * 0.15 instead of 0.5, which reproduces the measured 0.77 at BG 240 (0.783), and it is bounded
+     * below at 0.75 so it cannot leave the range the measurement covers.
+     *
+     * The rise-rate term is **removed**, not re-tuned: there is no support in the corpus for the
+     * sensitivity depending on how fast glucose is climbing. The aggressiveness that term was
+     * expressing is legitimate, and it belongs downstream, where it is bounded and audited.
+     *
+     * ## What is deliberately not changed
+     *
+     * The falling arm (`exp(0.15 * |combinedDelta|)`, capped at 1.4) is left exactly as it was. It
+     * raises the sensitivity on a fall, which makes the loop predict a larger effect from the insulin
+     * already on board and dose less. Lowering that cap would permit **more** insulin on a fall. That is
+     * a hypoglycaemia path and it is not touched here, even though the same 96 descents give no support
+     * for it either.
+     *
+     * @param delta the current 5-minute glucose delta, mg/dL.
+     * @param predicted the weighted mean of the recent deltas, mg/dL per 5 min.
+     * @param bg current glucose, mg/dL.
+     */
+    private fun dynamicDeltaCorrectionFactor(delta: Double?, predicted: Double?, bg: Double?): Double =
+        DynamicSensitivityPolicy.factorFor(delta = delta, predicted = predicted, bgMgdl = bg)
 
     private fun getRecentDeltas(): List<Double> {
         val data = iobCobCalculator.ads.getBucketedDataTableCopy() ?: return emptyList()
@@ -860,12 +894,6 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
 
         blended = blended.coerceIn(5.0, 300.0)
 
-        // Shadow only — nothing below reads this. Records what an **unconditional exit clamp**
-        // relative to the profile would produce. The chain's only relative bound today sits inside
-        // `DynIsfTrajectoryTuning`, behind gates that skip it; the absolute [5, 300] above is so wide
-        // it has never bound. See `docs/adr/0008-isf-decision-architecture.md`.
-        IsfSourceTelemetry.recordProfileRelativeShadow(blended, profileIsf)
-
         // Diagnostic only: keep the intermediate terms so a support package can attribute the
         // movement of the commanded sensitivity. See `docs/adr/0002-sensitivity-three-levels.md`.
         IsfSourceTelemetry.recordComponents(
@@ -920,15 +948,14 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
         val inputConstraints = ConstraintObject(0.0, aapsLogger) // fake. only for collecting all results
 
         val eff = profile as EffectiveProfile
-        if (!hardLimits.checkHardLimits(eff.iCfg.dia, app.aaps.core.ui.R.string.profile_dia, hardLimits.minDia(), hardLimits.maxDia())) return@withContext
+        if (!hardLimits.checkHardLimits(eff.iCfg.dia, app.aaps.core.ui.R.string.profile_dia, hardLimits.diaRange())) return@withContext
         if (!hardLimits.checkHardLimits(
                 profile.getIcTimeFromMidnight(MidnightUtils.secondsFromMidnight()),
                 app.aaps.core.ui.R.string.profile_carbs_ratio_value,
-                hardLimits.minIC(),
-                hardLimits.maxIC()
+                hardLimits.icRange()
             )
         ) return@withContext
-        if (!hardLimits.checkHardLimits(profile.getIsfMgdl("OpenAPSAIMIPlugin"), app.aaps.core.ui.R.string.profile_sensitivity_value, HardLimits.MIN_ISF, HardLimits.MAX_ISF)) return@withContext
+        if (!hardLimits.checkHardLimits(profile.getIsfMgdl("OpenAPSAIMIPlugin"), app.aaps.core.ui.R.string.profile_sensitivity_value, HardLimits.LIMIT_ISF)) return@withContext
         if (!hardLimits.checkHardLimits(profile.getMaxDailyBasal(), app.aaps.core.ui.R.string.profile_max_daily_basal_value, 0.02, hardLimits.maxBasal())) return@withContext
         if (!hardLimits.checkHardLimits(ch.fromPump(pump.baseBasalRate), app.aaps.core.ui.R.string.current_basal_value, 0.01, hardLimits.maxBasal())) return@withContext
 
@@ -965,15 +992,15 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
             rate = tb?.convertedToAbsolute(now, profile) ?: 0.0,
             minutesrunning = tb?.getPassedDurationToTimeInMinutes(now)
         )
-        var minBg = hardLimits.verifyHardLimits(Round.roundTo(profile.getTargetLowMgdl(), 0.1), app.aaps.core.ui.R.string.profile_low_target, HardLimits.LIMIT_MIN_BG[0], HardLimits.LIMIT_MIN_BG[1])
-        var maxBg = hardLimits.verifyHardLimits(Round.roundTo(profile.getTargetHighMgdl(), 0.1), app.aaps.core.ui.R.string.profile_high_target, HardLimits.LIMIT_MAX_BG[0], HardLimits.LIMIT_MAX_BG[1])
-        var targetBg = hardLimits.verifyHardLimits(profile.getTargetMgdl(), app.aaps.core.ui.R.string.temp_target_value, HardLimits.LIMIT_TARGET_BG[0], HardLimits.LIMIT_TARGET_BG[1])
+        var minBg = hardLimits.verifyHardLimits(Round.roundTo(profile.getTargetLowMgdl(), 0.1), app.aaps.core.ui.R.string.profile_low_target, HardLimits.LIMIT_MIN_BG)
+        var maxBg = hardLimits.verifyHardLimits(Round.roundTo(profile.getTargetHighMgdl(), 0.1), app.aaps.core.ui.R.string.profile_high_target, HardLimits.LIMIT_MAX_BG)
+        var targetBg = hardLimits.verifyHardLimits(profile.getTargetMgdl(), app.aaps.core.ui.R.string.temp_target_value, HardLimits.LIMIT_TARGET_BG)
         var isTempTarget = false
         persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now())?.let { tempTarget ->
             isTempTarget = true
-            minBg = hardLimits.verifyHardLimits(tempTarget.lowTarget, app.aaps.core.ui.R.string.temp_target_low_target, HardLimits.LIMIT_TEMP_MIN_BG[0], HardLimits.LIMIT_TEMP_MIN_BG[1])
-            maxBg = hardLimits.verifyHardLimits(tempTarget.highTarget, app.aaps.core.ui.R.string.temp_target_high_target, HardLimits.LIMIT_TEMP_MAX_BG[0], HardLimits.LIMIT_TEMP_MAX_BG[1])
-            targetBg = hardLimits.verifyHardLimits(tempTarget.target(), app.aaps.core.ui.R.string.temp_target_value, HardLimits.LIMIT_TEMP_TARGET_BG[0], HardLimits.LIMIT_TEMP_TARGET_BG[1])
+            minBg = hardLimits.verifyHardLimits(tempTarget.lowTarget, app.aaps.core.ui.R.string.temp_target_low_target, HardLimits.LIMIT_TEMP_MIN_BG)
+            maxBg = hardLimits.verifyHardLimits(tempTarget.highTarget, app.aaps.core.ui.R.string.temp_target_high_target, HardLimits.LIMIT_TEMP_MAX_BG)
+            targetBg = hardLimits.verifyHardLimits(tempTarget.target(), app.aaps.core.ui.R.string.temp_target_value, HardLimits.LIMIT_TEMP_TARGET_BG)
         }
         val insulinDivisor = when {
             profile.iCfg.peak > 65 -> 55 // rapid peak: 75
@@ -1004,14 +1031,17 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
 
             // Calcul du TDD sur 2 jours
             var tdd2Days = tddCalculator.averageTDD(tddCalculator.calculate(2, allowMissingDays = false))?.data?.totalAmount ?: 0.0
-            if (tdd2Days == 0.0 || tdd2Days < tdd7P) tdd2Days = tdd7P
+            // `!isFinite()` first: NaN and ±Infinity slip through `== 0.0` and `< tdd7P` (every
+            // comparison with NaN is false), so without it a broken value would pass the floor
+            // untouched and spread to the weighted tdd below. No change for any finite value.
+            if (!tdd2Days.isFinite() || tdd2Days == 0.0 || tdd2Days < tdd7P) tdd2Days = tdd7P
 //
             val tdd2DaysPerHour = tdd2Days / 24
             val tddLast4H = tdd2DaysPerHour * 4
 //
 // Calcul du TDD sur 1 jour avec une limite minimale pour ?viter des instabilit?s
             var tddDaily = tddCalculator.averageTDD(tddCalculator.calculate(1, allowMissingDays = false))?.data?.totalAmount ?: 0.0
-            if (tddDaily == 0.0 || tddDaily < tdd7P / 2) tddDaily = maxOf(tdd7P, minTDD)
+            if (!tddDaily.isFinite() || tddDaily == 0.0 || tddDaily < tdd7P / 2) tddDaily = maxOf(tdd7P, minTDD)
 
             if (tddDaily > tdd7P && tddDaily > 1.1 * tdd7P) {
                 tddDaily = 1.1 * tdd7P
@@ -1019,7 +1049,7 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
             }
 // // Calcul du TDD sur 24 heures
             var tdd24Hrs = tddCalculator.calculateDaily(-24, 0)?.totalAmount ?: 0.0
-            if (tdd24Hrs == 0.0) tdd24Hrs = tdd7P
+            if (!tdd24Hrs.isFinite() || tdd24Hrs == 0.0) tdd24Hrs = tdd7P
             val tdd24HrsPerHour = tdd24Hrs / 24
             val tddLast8to4H = tdd24HrsPerHour * 4
 // // Calcul pond?r? du TDD r?cent pour ?viter les fluctuations extr?mes
@@ -1072,8 +1102,15 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
                 variableSensitivity *= physioMults.isfFactor
                 aapsLogger.debug(LTag.APS, "🏥 LOOP: DynISF modulated: $variableSensitivity (x${physioMults.isfFactor})")
             }
+            // Profile-relative lower bound, unconditional and after every multiplier — ADR 0008 step 1,
+            // lower half only. It can only raise the sensitivity, which can only tighten the barrier and
+            // make the predictions attribute more effect to the insulin already on board.
+            variableSensitivity = DynamicSensitivityPolicy.floorAgainstProfile(
+                commandedMgdlPerU = variableSensitivity,
+                profileIsfMgdlPerU = runCatching { profile.getProfileIsfMgdl() }.getOrNull(),
+            )
             variableSensitivity = variableSensitivity.coerceIn(5.0, 300.0)
-            
+
             aapsLogger.debug(LTag.APS, "Final adaptive ISF after clamping: $variableSensitivity")
 
 // ?? Cr?ation du r?sultat final (Convention: Ratio < 1 = R?sistant)
@@ -1350,7 +1387,31 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
                 max_bg = maxBg,
                 target_bg = targetBg,
                 carb_ratio = profile.getIc(),
-                sens = profile.getIsfMgdl("OpenAPSAIMIPlugin") * physioMults.isfFactor, // ?? ISF Modulation
+                // The profile-relative lower bound is applied here too, because this is the value that
+                // becomes `profile.sens` — the number read by the predictions, the tube advisor and the
+                // hypoglycaemia guard, and exported as `command_isf_mgdl`. Without it the bound would sit
+                // before the multipliers that undo it, which is the defect ADR 0008 keeps recording: the
+                // physiological factor is applied after the `coerceIn(5.0, 300.0)` on this path, which is
+                // how a commanded sensitivity of 4.54 mg/dL/U was reached on 2026-08-14 (5.00 x 0.908).
+                sens = DynamicSensitivityPolicy.floorAgainstProfile(
+                    commandedMgdlPerU = profile.getIsfMgdl("OpenAPSAIMIPlugin") * physioMults.isfFactor,
+                    profileIsfMgdlPerU = runCatching { profile.getProfileIsfMgdl() }.getOrNull(),
+                ).also { commanded ->
+                    // Shadow only — nothing reads this. Records what an **unconditional exit clamp**
+                    // relative to the profile would command.
+                    //
+                    // It was first placed inside `calculateVariableIsf`, before the effective-profile
+                    // percentage and the physiological factor. Production then showed the commanded
+                    // sensitivity reaching x0.46 and x2.11 of profile while the shadow reported a
+                    // single hit in 282 ticks — the guard had been put before the multipliers that
+                    // undo it, which is precisely the defect this ADR set keeps documenting. It now
+                    // sits where the value is final.
+                    // See `docs/adr/0008-isf-decision-architecture.md`.
+                    IsfSourceTelemetry.recordProfileRelativeShadow(
+                        blendedMgdl = commanded,
+                        profileIsfMgdl = runCatching { profile.getProfileIsfMgdl() }.getOrNull() ?: 0.0,
+                    )
+                },
                 autosens_adjust_targets = false, // not used
                 max_daily_safety_multiplier = preferences.get(DoubleKey.ApsMaxDailyMultiplier) * physioMults.smbFactor, // ?? SMB Cap modulation
                 current_basal_safety_multiplier = preferences.get(DoubleKey.ApsMaxCurrentBasalMultiplier) * physioMults.basalFactor, // ?? Basal Cap modulation
@@ -1393,16 +1454,29 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
 
             // Keep AIMI aligned with the upstream SMB/AutoISF crash guard: these values feed divisions in
             // determine_basal and a non-finite/non-positive input can otherwise cascade into NaN dosing fields.
+            // TDD is checked for finiteness only, and outside the dynIsfMode gate on purpose.
+            // Unlike SMB, AIMI always has a TDD: it falls back to the OApsAIMITDD7 preference, so
+            // `TDD <= 0.0` cannot happen and adding it would be dead code that only creates a
+            // dependency on that preference's lower bound. A NaN, on the other hand, is not caught
+            // by the `== 0.0 || < tdd7P` floors that build it (every comparison with NaN is false),
+            // and it would reach `basalaimi` and `ci` in DetermineBasalAIMI2. Those floors are now
+            // NaN-proof too; this check stays as the backstop.
             val invalidInputs = !oapsProfile.sens.isFinite() || oapsProfile.sens <= 0.0 ||
                 !oapsProfile.carb_ratio.isFinite() || oapsProfile.carb_ratio <= 0.0 ||
                 !autosensResult.ratio.isFinite() || autosensResult.ratio <= 0.0 ||
+                !oapsProfile.TDD.isFinite() ||
                 (dynIsfMode && (!oapsProfile.variable_sens.isFinite() || oapsProfile.variable_sens <= 0.0))
             if (invalidInputs) {
                 val msg = "OpenAPS AIMI aborting: invalid ISF inputs " +
                     "dynIsfMode=$dynIsfMode sens=${oapsProfile.sens} carb_ratio=${oapsProfile.carb_ratio} " +
-                    "autosensRatio=${autosensResult.ratio} variable_sens=${oapsProfile.variable_sens}"
+                    "autosensRatio=${autosensResult.ratio} variable_sens=${oapsProfile.variable_sens} " +
+                    "TDD=${oapsProfile.TDD}"
                 aapsLogger.error(LTag.APS, msg)
+                // Parity with OpenAPSSMBPlugin: without these two the abort is invisible - it never
+                // reaches Crashlytics and the APS card keeps showing the previous run.
+                fabricPrivacy.logException(IllegalStateException(msg))
                 rxBus.send(EventResetOpenAPSGui(msg))
+                rxBus.send(EventOpenAPSUpdateGui())
                 return@withContext
             }
 
