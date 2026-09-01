@@ -1,6 +1,7 @@
 package app.aaps.plugins.dexcomoneplus.session
 
 import app.aaps.plugins.dexcomoneplus.OnePlusWarmupState
+import app.aaps.plugins.dexcomoneplus.scan.OnePlusScanBudget
 import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.Test
 
@@ -72,11 +73,14 @@ class OnePlusBleSessionCyclePolicyTest {
     }
 
     @Test
-    fun `stale MAC is only suspected when another ONE+ is heard and ours stayed silent long enough`() {
+    fun `stale MAC is suspected from silence alone — a foreign ONE+ is not required`() {
         val threshold = OnePlusBleSessionCyclePolicy.STALE_MAC_SUSPICION_AFTER_MS
 
         assertThat(
             OnePlusBleSessionCyclePolicy.suspectStaleMac(continuousAdvSilenceMs = threshold, foreignSightings = 0),
+        ).isTrue()
+        assertThat(
+            OnePlusBleSessionCyclePolicy.suspectStaleMac(continuousAdvSilenceMs = threshold - 1, foreignSightings = 0),
         ).isFalse()
         assertThat(
             OnePlusBleSessionCyclePolicy.suspectStaleMac(continuousAdvSilenceMs = threshold - 1, foreignSightings = 1),
@@ -228,5 +232,116 @@ class OnePlusBleSessionCyclePolicyTest {
                 advertisementFresh = false,
             ),
         ).isTrue()
+    }
+
+    @Test
+    fun `persistent failure raises the strategy index instead of pinning it at 1`() {
+        assertThat(OnePlusBleSessionCyclePolicy.nextPersistentAttempt(1)).isEqualTo(2)
+        assertThat(OnePlusBleSessionCyclePolicy.nextPersistentAttempt(2)).isEqualTo(3)
+    }
+
+    @Test
+    fun `Samsung still parks autoConnect on attempt 1 when there is no fresh ADV`() {
+        // SamsungDefault.autoConnectFromAttempt = 0. This is the field-proven park; do not change it.
+        assertThat(
+            OnePlusBleSessionCyclePolicy.useAutoConnect(
+                advFresh = false,
+                attempt = 1,
+                autoConnectFromAttempt = 0,
+            ),
+        ).isTrue()
+        assertThat(
+            OnePlusBleSessionCyclePolicy.useAutoConnect(
+                advFresh = true,
+                attempt = 1,
+                autoConnectFromAttempt = 0,
+            ),
+        ).isFalse()
+    }
+
+    @Test
+    fun `Generic reaches autoConnect on attempt 2, not on the pinned attempt 1`() {
+        assertThat(
+            OnePlusBleSessionCyclePolicy.useAutoConnect(
+                advFresh = false,
+                attempt = 1,
+                autoConnectFromAttempt = 2,
+            ),
+        ).isFalse()
+        assertThat(
+            OnePlusBleSessionCyclePolicy.useAutoConnect(
+                advFresh = false,
+                attempt = 2,
+                autoConnectFromAttempt = 2,
+            ),
+        ).isTrue()
+    }
+
+    @Test
+    fun `Generic skips the ADV wait after a failed hard connect so autoConnect can run now`() {
+        assertThat(
+            OnePlusBleSessionCyclePolicy.skipAdvWaitAfterFailedConnect(
+                lastConnectUsedAutoConnect = false,
+                nextAttempt = 2,
+                autoConnectFromAttempt = 2,
+            ),
+        ).isTrue()
+    }
+
+    @Test
+    fun `Samsung does not skip the ADV wait after a failed autoConnect — no GATT storm`() {
+        assertThat(
+            OnePlusBleSessionCyclePolicy.skipAdvWaitAfterFailedConnect(
+                lastConnectUsedAutoConnect = true,
+                nextAttempt = 2,
+                autoConnectFromAttempt = 0,
+            ),
+        ).isFalse()
+    }
+
+    @Test
+    fun `a second blind connect waits a full silence window after the last one`() {
+        val silence = OnePlusBleSessionCyclePolicy.BLIND_CONNECT_AFTER_ADV_SILENCE_MS
+
+        assertThat(
+            OnePlusBleSessionCyclePolicy.authorizeBlindConnect(
+                continuousAdvSilenceMs = silence,
+                msSinceLastBlindConnect = 30_000L,
+            ),
+        ).isFalse()
+        assertThat(
+            OnePlusBleSessionCyclePolicy.authorizeBlindConnect(
+                continuousAdvSilenceMs = silence + silence,
+                msSinceLastBlindConnect = silence,
+            ),
+        ).isTrue()
+    }
+
+    @Test
+    fun `the persistent ADV wait stays inside the platform scan quota with both slots running`() {
+        val cycleMs = OnePlusBleSessionCyclePolicy.PERSISTENT_ADV_SCAN_MS +
+            OnePlusBleSessionCyclePolicy.ADV_WAIT_RESTART_DELAY_MS
+        val startsPerWindowPerSlot = OnePlusScanBudget.WINDOW_MS.toDouble() / cycleMs
+        val bothSlots = 2 * startsPerWindowPerSlot
+
+        // The regression this guards: the wait used OemDeviceProfile.preConnectScanMs (3 s on
+        // Generic, 2 s on Pixel) plus a 250 ms pause, i.e. a 3.25 s / 2.25 s cycle. That is 18 and
+        // 27 scan starts per minute against a platform allowance of 10 — a single slot was over
+        // quota on its own, and the app throttled itself blind trying to compensate.
+        assertThat(bothSlots).isLessThan(OnePlusScanBudget.MAX_STARTS_PER_WINDOW.toDouble())
+        assertThat(startsPerWindowPerSlot).isLessThan(
+            OnePlusScanBudget.MAX_STARTS_PER_WINDOW_PLATFORM.toDouble() / 2,
+        )
+    }
+
+    @Test
+    fun `the post-cycle guard outlasts a residual burst but never hides the next duty cycle`() {
+        val guard = OnePlusBleSessionCyclePolicy.POST_CYCLE_ADV_GUARD_MS
+
+        // Field log 2026-08-20: the residual advertisement arrived 127 ms after the cycle closed.
+        assertThat(guard).isGreaterThan(1_000L)
+        // A G7 duty cycle is ~5 min, and the blind-connect escape fires at 4 min; the guard must be
+        // far below both so it can never swallow a genuine window or delay the escape.
+        assertThat(guard).isLessThan(OnePlusBleSessionCyclePolicy.BLIND_CONNECT_AFTER_ADV_SILENCE_MS / 10)
     }
 }

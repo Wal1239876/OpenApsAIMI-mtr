@@ -368,3 +368,103 @@ If Nightscout `dev` eventually contains Eversense:
 ## Escalation
 
 If conflicts are unsolvable without architectural change: stop merge, document file list + `git log --merge`, and decide explicitly whether to **defer** Eversense to a follow-up branch rather than shipping a broken half-merge.
+
+### CAPTCG sync 2026-08-31 (battery + BLE robustness)
+
+Reference: [CAPTCG/AndroidAPS-Eversense-](https://github.com/CAPTCG/AndroidAPS-Eversense-) master @ `fc1ae8c8f2`.
+Merge base with this fork is upstream `7fc8205e9a`, so every Eversense difference in that range is
+CAPTCG's own work. Ported by hand — CAPTCG is Hilt-based with a non-nullable `gattCallback`, our
+`EversenseCGMPlugin` is a singleton with nullable fields, so `git apply` is not usable.
+
+**Ported:**
+
+| Change | File | Notes |
+|--------|------|--------|
+| E3 battery mapped once | `packets/e3/GetBatteryPercentagePacket.kt`, `packets/EversenseE3Communicator.kt` | **Fork bug, not an upstream feature.** Both the packet and the communicator mapped the 0–11 index to a percentage, so raw 1 became 45 % and raw 2 became 95 %. `EversensePlugin`'s `batteryPercentage in 1..10` low-battery notification was therefore unreachable. `BatteryLevel` is now the single mapping table |
+| Bad battery byte no longer reads as full | `packets/e3/GetBatteryPercentagePacket.kt` | `coerceIn(0, 11)` turned a corrupt `0xFF` into 100 %. Now reports `-1` (unknown), already handled downstream |
+| Battery / sensor-read push triggers a sync | `packets/e3/EversenseE3Packets.kt` | `TransmitterBatteryPush` (0x47) and `SensorReadAlertPush` (0x49) added to `isPushPacket`; both constants existed but were unused, so battery state waited up to 100 s for KeepAlive |
+| `isCleaningUp` guard | `EversenseGattCallback.kt` | A write racing a GATT teardown fails cleanly instead of parsing a packet that never got a response. Flag is reset in a `finally` so a revoked `BLUETOOTH_CONNECT` cannot wedge it permanently |
+| Serialized diagnostic mode / signal strength | `EversenseGattCallback.kt`, `EversenseCGMPlugin.kt` | Generic `submitToExecutor<R>`. **We do not copy CAPTCG's shape**: theirs submits to the single-thread `bleExecutor` from inside that same executor and blocks, so diagnostic mode is never re-enabled after a reconnect. Split into `writeDiagnosticMode` / `setDiagnosticModeOnExecutor` |
+| Shortcut-auth fallback | `EversenseGattCallback.kt` | Combined end state of `16146d76bd` + `355ec2b55c` only. The first commit alone deadlocks on a broken network; never port it on its own |
+| Status screen live refresh | `activities/EversenseStatusActivity.kt` | Rewrite, not a patch: ours did not implement `EversenseWatcher` at all. `onResume` / `onPause`, refreshes on `onTransmitterReady` so the screen stops showing the red cross while auth completes |
+| Eversense log in the log export | `util/EversenseLogger.kt`, `implementation/.../MaintenanceImpl.kt` | Path is ours, not CAPTCG's: their hardcoded `/sdcard/AndroidAPS/eversense` fails on Android 11+, and the old `/data/data/info.nightscout.androidaps/eversense` was wrong for the four client flavours |
+| 365 glucose ceiling 450 mg/dL | `packets/e365/GetGlucoseDataPacket.kt`, `GetGlucoseLogValuesPacket.kt` | Replaces the old 1000 ceiling; the dead `> 1000` checks in both communicators are removed. Rejection happens before the `Response` is built, so a dropped reading can never surface as a low value |
+
+**Deferred — needs a real transmitter, do not port blind:**
+
+- E3 register addresses (`EversenseE3Memory.kt`) — see the dedicated section below.
+- `GetSignalStrengthRawPacket` threshold mapping — depends on the unresolved register above.
+- `CalibrationReadiness.from365()` forcing READY — interacts with our readiness-gated calibration
+  button; if `receivedData[3]` is non-zero in the field, 365 users may not be able to calibrate today.
+- `CalibrationPhase.fromE3` and `GetCalibrationDailyPacket` — ours are unit-test-locked, CAPTCG's
+  evidence is a decompiled APK, unreconciled.
+- DMS `dmsCode` / `buildAlertBytes` / `buildMgBytes`, Hilt DI refactor, `@IntKey(575)`, sync-days
+  spinner, `SetBloodGlucosePointPacket` (dead code, CAPTCG marks it untested), i18n string extraction.
+
+**Fork kept (verified untouched):** calibration readiness UI, `BooleanKey.EversenseCloudUploadToast`,
+`@IntKey(445)` with ONE+ @446 / Libre3 @447 / Ottai @475, `RECEIVER_NOT_EXPORTED` on the Bluetooth
+receiver, the `rawData.size < 3` chunk guard, `reconnectRunnable` + `removeCallbacks`, EU DMS
+`ousiamapialpha` endpoints, the `EversenseAbout` AppCompat dialog, notification-reader v3.
+
+**Verified:** `:app:assembleFullDebug` green; `:plugins:eversense:testFullDebugUnitTest` 66 tests,
+0 failures, including 13 new tests for the battery mapping and the push-packet set.
+**Not verified — needs hardware:** every runtime behaviour (E3 battery values, the 0x47/0x49 push
+branch, diagnostic-mode timing, 365 shortcut/full-auth alternation, status-screen refresh, the log
+file actually appearing under the external files directory, the 450 ceiling on a live 365).
+
+### E3 flash register addresses — open question (reviewed 2026-09-01)
+
+Four entries in `plugins/eversense/.../enums/EversenseE3Memory.kt` differ between this fork and
+CAPTCG. They are the ONLY differences in that table; both tables have 37 entries and no duplicates.
+**Nothing here is settled. Do not change any address without a capture from a real E3.**
+
+| Entry | Ours | CAPTCG | EversenseKit (loopandlearn, iOS reference) | Shared ancestor (2026-05-12 import) |
+|-------|------|--------|--------------------------------------------|--------------------------------------|
+| `BatteryPercentage` | 0x040B | 0x0406 | **0x0406** | 0x0406 |
+| `CalibrationReadiness` | 0x040C | 0x0137 | **0x040A** | 0x040A |
+| `MmaFeatures` | 0x0137 | 0x040C | **0x0137** | 0x0137 |
+| `SensorFieldCurrentRaw` | 0x0874 | 0x049D | **0x049D** | 0x0874 |
+
+**Provenance.** The shared ancestor is Craig Gordon's 2026-05-12 patch, imported here verbatim as
+`ef448a8e0a`. On 2026-05-13 commit `476b6f34ce` moved battery to 0x040B and readiness to 0x040C.
+The fork owner has confirmed that change was taken from CAPTCG's analysis of the same day
+(CAPTCG's Swift fork commit `71fbb32`, "verified against official app MemoryMap", no artifact
+attached). **Craig then reverted it himself** on 2026-05-28 (`fb88a9d`, "mirrors Android June26
+fixes"), moving battery back to 0x0406 and putting readiness on 0x0137 — MmaFeatures' address —
+which forced MmaFeatures onto 0x040C.
+
+**Do not treat CAPTCG's stale doc comment as corroboration.** `captcg/master:.../CalibrationReadiness.kt:45`
+still reads `// E3 mapping — raw byte from register 0x040C`, contradicting CAPTCG's own table.
+That comment is a leftover from the same 2026-05-13 change our value came from, so it is the same
+single source seen twice, not independent agreement. Upstream says 0x040A, so the comment is wrong too.
+
+**Evidence quality.** Upstream `EversenseKit` has never changed battery (0x0406) or readiness
+(0x040A) since the file was created. But it is itself reverse-engineered, so it is the best
+documentary evidence available, not ground truth. CAPTCG's Swift fork is NOT a second source: it
+mirrors CAPTCG's Android. There is no captured real-device fixture for any of these four registers
+in either EversenseKit clone (`EversenseKitTests` holds 365 packets plus one E3 glucose packet only),
+and no Eversense log exists anywhere on the maintainer's machine as of 2026-09-01.
+
+**Risk if wrong**, worst first:
+
+1. `CalibrationReadiness` — **highest**. `from()` maps 0..10 and falls to `UNKNOWN` with no log. A
+   wrong address returning byte 0x00 reads as `READY` and unlocks the calibration Submit button on a
+   transmitter that is not ready. Both forks currently disagree with upstream here.
+2. `SensorFieldCurrentRaw` — `raw / 20` then `coerceIn(0, 100)`, so any 16-bit garbage still renders
+   as a confident 0–100 % bar in the placement guide. Undetectable from the UI. Ours (0x0874)
+   appears nowhere in upstream, in any revision.
+3. `BatteryPercentage` — **now self-diagnosing.** Since the 2026-08-31 fix dropped `coerceIn(0, 11)`,
+   a byte outside 0..11 logs `Battery register value out of range: <n>` and reports -1 instead of a
+   fake percentage. A wrong address is therefore likely, though not certain, to announce itself.
+4. `MmaFeatures` — none today. `state.mmaFeatures` is written and never read anywhere in the repo.
+
+**Capture that would settle it.** One E3 sync with `EversenseLogger` at info level:
+
+- Battery: `Battery raw register value: <n>` over two syncs several hours apart. A value in 0..11
+  that falls as the battery discharges confirms the address. Out of range refutes it. A static
+  in-range value proves nothing — that is the trap.
+- Readiness: read the candidates in the same session right after a successful calibration. The real
+  register must show 0x08 (`WAITING_POST_CALIBRATION`) then 0x03 (`TOO_SOON`) inside the 2 h lockout.
+  One that stays 0x00 through that window is not the readiness register.
+- Signal: read as 2-byte LE while lifting the transmitter off the implant and putting it back. The
+  real one swings by hundreds.

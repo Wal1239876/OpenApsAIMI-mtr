@@ -8,8 +8,9 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.ParcelUuid
+import android.os.PowerManager
 import android.os.SystemClock
-import android.util.Log
+import app.aaps.plugins.dexcomoneplus.OnePlusLog
 import app.aaps.plugins.dexcomoneplus.OnePlusLogMarkers
 import app.aaps.plugins.dexcomoneplus.gatt.OnePlusBluetoothUuids
 import app.aaps.plugins.dexcomoneplus.identity.OnePlusAdvCandidate
@@ -33,6 +34,11 @@ import java.util.concurrent.atomic.AtomicReference
  * The known-MAC pre-connect wait uses a platform [ScanFilter], allowing delivery while the screen
  * is off on Android/Samsung.
  *
+ * The 4-digit pairing code plays no part on this path. It is the KEKS password and is checked at
+ * Connect only. It is not carried in the advertisement, so the scan can narrow the list down to the
+ * G7/ONE+ family and rank it, and no further: telling two ONE+ apart is the user's call — see
+ * [autoSelectSingle].
+ *
  * ⚠️ ASYNC IMPACT: [OnePlusScanListener.onDevice] on binder thread — hop to main for Compose.
  */
 @SuppressLint("MissingPermission")
@@ -48,10 +54,18 @@ class OnePlusBleScannerAndroid(
     private val bluetoothManager =
         appContext.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
 
+    /** Screen state — the unfiltered throttle probe is only meaningful while the screen is on. */
+    private val powerManager =
+        appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+
     private val scanning = AtomicBoolean(false)
     private val seen = ConcurrentHashMap<String, OnePlusScanResult>()
 
-    /** Consecutive `awaitTarget` windows that heard nothing at all — see [noteScanOutcome]. */
+    /** Consecutive filtered `awaitTarget` windows that heard nothing — see unfiltered probe. */
+    @Volatile
+    private var consecutiveFilteredSilent = 0
+
+    /** Consecutive **unfiltered** silent probes — see [noteScanOutcome]. */
     @Volatile
     private var silentScans = 0
 
@@ -68,7 +82,7 @@ class OnePlusBleScannerAndroid(
         }
 
         override fun onScanFailed(errorCode: Int) {
-            Log.e(OnePlusLogMarkers.TAG, "${OnePlusLogMarkers.SCAN}: [$slot] failed errorCode=$errorCode")
+            OnePlusLog.e("${OnePlusLogMarkers.SCAN}: [$slot] failed errorCode=$errorCode")
             scanning.set(false)
         }
     }
@@ -77,7 +91,7 @@ class OnePlusBleScannerAndroid(
         val adapter = bluetoothManager.adapter
         val leScanner = adapter?.bluetoothLeScanner
         if (adapter == null || !adapter.isEnabled || leScanner == null) {
-            Log.e(OnePlusLogMarkers.TAG, "${OnePlusLogMarkers.SCAN}: [$slot] adapter unavailable")
+            OnePlusLog.e("${OnePlusLogMarkers.SCAN}: [$slot] adapter unavailable")
             return
         }
         stopScan()
@@ -91,7 +105,7 @@ class OnePlusBleScannerAndroid(
         OnePlusScanBudget.record(SystemClock.elapsedRealtime())
         leScanner.startScan(null, settings, callback)
         scanning.set(true)
-        Log.i(OnePlusLogMarkers.TAG, "${OnePlusLogMarkers.SCAN}: [$slot] started")
+        OnePlusLog.i("${OnePlusLogMarkers.SCAN}: [$slot] started")
     }
 
     override fun stopScan() {
@@ -102,7 +116,7 @@ class OnePlusBleScannerAndroid(
         }
         scanning.set(false)
         listener = null
-        Log.i(OnePlusLogMarkers.TAG, "${OnePlusLogMarkers.SCAN}: [$slot] stopped")
+        OnePlusLog.i("${OnePlusLogMarkers.SCAN}: [$slot] stopped")
     }
 
     override fun isScanning(): Boolean = scanning.get()
@@ -123,7 +137,7 @@ class OnePlusBleScannerAndroid(
         val adapter = bluetoothManager.adapter
         val leScanner = adapter?.bluetoothLeScanner
         if (adapter == null || !adapter.isEnabled || leScanner == null) {
-            Log.e(OnePlusLogMarkers.TAG, "${OnePlusLogMarkers.SCAN}: [$slot] awaitTarget adapter unavailable")
+            OnePlusLog.e("${OnePlusLogMarkers.SCAN}: [$slot] awaitTarget adapter unavailable")
             return OnePlusAdvWaitResult()
         }
         val target = normalizeTargetAddress(address)
@@ -159,11 +173,18 @@ class OnePlusBleScannerAndroid(
             }
 
             override fun onScanFailed(errorCode: Int) {
+                if (shouldBackOffOnScanFailed(errorCode)) {
+                    OnePlusScanBudget.blockFor(SystemClock.elapsedRealtime(), OnePlusScanBudget.WINDOW_MS)
+                    OnePlusLog.w(
+                        "${OnePlusLogMarkers.SCAN}: [$slot] awaitTarget failed errorCode=$errorCode — " +
+                            "OS refused the scan; backing off one budget window",
+                    )
+                } else {
+                    OnePlusLog.e(
+                        "${OnePlusLogMarkers.SCAN}: [$slot] awaitTarget failed errorCode=$errorCode",
+                    )
+                }
                 heardAnything.set(true)
-                Log.e(
-                    OnePlusLogMarkers.TAG,
-                    "${OnePlusLogMarkers.SCAN}: [$slot] awaitTarget failed errorCode=$errorCode",
-                )
                 latch.countDown()
             }
         }
@@ -179,43 +200,137 @@ class OnePlusBleScannerAndroid(
                 .setServiceUuid(ParcelUuid(OnePlusBluetoothUuids.Advertisement))
                 .build()
             leScanner.startScan(listOf(targetFilter, familyFilter), settings, cb)
-            Log.i(
-                OnePlusLogMarkers.TAG,
+            OnePlusLog.i(
                 "${OnePlusLogMarkers.SCAN}: [$slot] awaitTarget filtered started " +
                     "mac=***${target.takeLast(5)} timeoutMs=$timeoutMs",
             )
             latch.await(timeoutMs.coerceAtLeast(1L), TimeUnit.MILLISECONDS)
-            noteScanOutcome(heardAnything.get(), timeoutMs)
             OnePlusAdvWaitResult(target = found.get(), foreign = foreign.values.toList())
         } catch (t: Throwable) {
-            Log.w(OnePlusLogMarkers.TAG, "${OnePlusLogMarkers.SCAN}: [$slot] awaitTarget ${t.message}")
+            OnePlusLog.w("${OnePlusLogMarkers.SCAN}: [$slot] awaitTarget ${t.message}")
+            // An exception is not evidence about the OS, so do not let it feed the throttle
+            // heuristic: claim we heard something and leave the counters alone.
+            heardAnything.set(true)
             OnePlusAdvWaitResult(foreign = foreign.values.toList())
         } finally {
             try {
                 leScanner.stopScan(cb)
             } catch (_: Throwable) {
             }
-            Log.i(OnePlusLogMarkers.TAG, "${OnePlusLogMarkers.SCAN}: [$slot] awaitTarget stopped")
+            OnePlusLog.i("${OnePlusLogMarkers.SCAN}: [$slot] awaitTarget stopped")
+        }.also { result ->
+            // Deliberately after the `finally`: the probe below starts its own scanner, and running
+            // it while this one is still registered doubled the registration pressure at exactly the
+            // moment the platform quota was tightest (CUBOT field log 2026-08-20, "unfiltered
+            // throttle probe started" logged before the matching "awaitTarget stopped").
+            noteFilteredWindowOutcome(
+                heardAnything = heardAnything.get(),
+                foundTarget = result.target != null,
+            )
         }
     }
 
     /**
-     * A scan that the OS refused to register delivers **nothing at all** — not even `onScanFailed` on
-     * some builds (field log 2026-08-11: `registration failed because app is scanning too frequently`
-     * right after our own "filtered started" line, then 8 s of waiting on a dead callback). We cannot
-     * see the refusal directly, so we infer it: a scan window that heard no advertisement of any kind,
-     * not even from a neighbour, is suspicious, and two in a row are treated as throttled.
-     *
-     * The only reaction is to scan LESS — one extra platform window of cool-down, booked in the shared
-     * budget. It can never make the app scan more, so it is safe even if the inference is wrong.
+     * A filtered pre-connect window cannot tell "OS refused the scan" from "my sensor is asleep".
+     * The MAC+FEBC filter never delivers a neighbour phone or watch, so silence is the normal
+     * one-sensor house (CUBOT field log 2026-08-16). Back-off is fed only by:
+     * - a direct [ScanCallback.onScanFailed] refusal, or
+     * - a short **unfiltered** probe every [UNFILTERED_THROTTLE_PROBE_EVERY] silent filtered windows.
+     * An unfiltered 1 s window in a lived-in room almost always hears something; if it hears
+     * nothing, throttling is a fair guess.
+     */
+    private fun noteFilteredWindowOutcome(heardAnything: Boolean, foundTarget: Boolean) {
+        if (foundTarget || heardAnything) {
+            consecutiveFilteredSilent = 0
+            silentScans = 0
+            return
+        }
+        consecutiveFilteredSilent = nextFilteredSilentWindows(consecutiveFilteredSilent)
+        if (!shouldRunUnfilteredThrottleProbe(consecutiveFilteredSilent)) return
+        consecutiveFilteredSilent = 0
+        // AOSP ScanManager suspends UNFILTERED scans while the screen is off ("Cannot start
+        // unfiltered scan in screen-off. This scan will be resumed later"), so with the screen off
+        // the probe can only ever report silence and the back-off would fire on a premise the OS
+        // guarantees false. CUBOT field log 2026-08-20: 16 probes, 16 refusals, 0 valid samples —
+        // the probe was causing the very throttling it was meant to detect.
+        if (!powerManager.isInteractive) {
+            OnePlusLog.i(
+                "${OnePlusLogMarkers.SCAN}: [$slot] throttle probe skipped — screen off " +
+                    "(the OS suspends unfiltered scans, so silence would prove nothing)",
+            )
+            // Do not carry half a count into the next screen-on period.
+            silentScans = 0
+            return
+        }
+        val heardOpen = probeUnfiltered(UNFILTERED_THROTTLE_PROBE_MS)
+        noteScanOutcome(heardOpen, UNFILTERED_THROTTLE_PROBE_MS)
+    }
+
+    /**
+     * Open 1 s scan used only as a throttle detector. Counts against [OnePlusScanBudget] like any
+     * other start. ⚠️ ASYNC IMPACT: blocks the BLE executor for up to [timeoutMs] plus budget wait.
+     */
+    private fun probeUnfiltered(timeoutMs: Long): Boolean {
+        val leScanner = bluetoothManager.adapter?.bluetoothLeScanner ?: return false
+        val heard = AtomicBoolean(false)
+        val latch = CountDownLatch(1)
+        val cb = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                heard.set(true)
+                latch.countDown()
+            }
+
+            override fun onBatchScanResults(results: MutableList<ScanResult>) {
+                if (results.isNotEmpty()) {
+                    heard.set(true)
+                    latch.countDown()
+                }
+            }
+
+            override fun onScanFailed(errorCode: Int) {
+                if (shouldBackOffOnScanFailed(errorCode)) {
+                    OnePlusScanBudget.blockFor(SystemClock.elapsedRealtime(), OnePlusScanBudget.WINDOW_MS)
+                    OnePlusLog.w(
+                        "${OnePlusLogMarkers.SCAN}: [$slot] unfiltered probe failed errorCode=$errorCode — " +
+                            "backing off one budget window",
+                    )
+                }
+                heard.set(true)
+                latch.countDown()
+            }
+        }
+        awaitScanBudgetSlot()
+        return try {
+            val settings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .build()
+            leScanner.startScan(null, settings, cb)
+            OnePlusLog.i(
+                "${OnePlusLogMarkers.SCAN}: [$slot] unfiltered throttle probe started timeoutMs=$timeoutMs",
+            )
+            latch.await(timeoutMs.coerceAtLeast(1L), TimeUnit.MILLISECONDS)
+            heard.get()
+        } catch (t: Throwable) {
+            OnePlusLog.w("${OnePlusLogMarkers.SCAN}: [$slot] unfiltered probe ${t.message}")
+            false
+        } finally {
+            try {
+                leScanner.stopScan(cb)
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    /**
+     * Direct OS refusal. Some builds still omit this callback and fail silent — that path is the
+     * unfiltered probe, not filtered-window silence.
      */
     private fun noteScanOutcome(heardAnything: Boolean, timeoutMs: Long) {
         val next = nextSilentScanState(silentScans, heardAnything)
         silentScans = next.silentScans
         if (!next.backOff) return
-        Log.w(
-            OnePlusLogMarkers.TAG,
-            "${OnePlusLogMarkers.SCAN}: [$slot] $SILENT_SCANS_BEFORE_BACKOFF silent scans " +
+        OnePlusLog.w(
+            "${OnePlusLogMarkers.SCAN}: [$slot] $SILENT_SCANS_BEFORE_BACKOFF silent unfiltered probes " +
                 "(${timeoutMs}ms each, no advertisement at all) — the OS may be refusing our scans " +
                 "(\"scanning too frequently\"); backing off one budget window",
         )
@@ -233,8 +348,7 @@ class OnePlusBleScannerAndroid(
             val wait = OnePlusScanBudget.reserve(SystemClock.elapsedRealtime())
             if (wait <= 0L) return
             if (!logged) {
-                Log.i(
-                    OnePlusLogMarkers.TAG,
+                OnePlusLog.i(
                     "${OnePlusLogMarkers.SCAN}: [$slot] scan budget full — deferring startScan ${wait}ms",
                 )
                 logged = true
@@ -262,15 +376,17 @@ class OnePlusBleScannerAndroid(
         val febcOk = hasAdvUuid && !g6MarketingName
         if (!candidate && !febcOk && !nameMatches(name)) return
         // When we have a sticky session, drop weak unrelated FEBC noise unless name/MAC matches.
-        if (hint != null && !candidate && febcOk && !nameMatches(name)) return
+        // "Sticky" means the hint really knows a transmitter. A hint that only carries the code on
+        // screen knows none, and must not hide the nameless FEBC advertisement of a new sensor.
+        val sticky = !hint?.lastMac.isNullOrBlank() || !hint?.lastDeviceName.isNullOrBlank()
+        if (sticky && !candidate && febcOk && !nameMatches(name)) return
 
         val hit = OnePlusScanResult(address = address, name = name, rssi = result.rssi)
             .apply { seenElapsedMs = SystemClock.elapsedRealtime() }
         val previous = seen.put(address, hit)
         if (previous == null || previous.rssi != hit.rssi || previous.name != hit.name) {
             val score = OnePlusAdvCandidate.rankScore(name, address, hit.rssi, hint)
-            Log.d(
-                OnePlusLogMarkers.TAG,
+            OnePlusLog.d(
                 "${OnePlusLogMarkers.SCAN}: [$slot] device name=${name ?: "?"} rssi=${hit.rssi} " +
                     "score=$score addr=***${address.takeLast(5)}",
             )
@@ -281,9 +397,18 @@ class OnePlusBleScannerAndroid(
     companion object {
 
         /**
+         * Consecutive filtered windows with no callback at all before we run a 1 s unfiltered
+         * probe. Five, so a quiet sensor does not pay for a probe on every pair of 3 s waits.
+         */
+        const val UNFILTERED_THROTTLE_PROBE_EVERY = 5
+
+        /** Length of the unfiltered throttle probe. Short: it only needs to hear *anything*. */
+        const val UNFILTERED_THROTTLE_PROBE_MS = 1_000L
+
+        /**
          * Consecutive scan windows with no advertisement at all before we assume the OS is refusing
          * our scans. Two, so a genuinely quiet moment (every sensor asleep, no neighbour) does not
-         * trigger a needless cool-down.
+         * trigger a needless cool-down. Fed only by the unfiltered probe, never by a filtered wait.
          */
         const val SILENT_SCANS_BEFORE_BACKOFF = 2
 
@@ -302,7 +427,58 @@ class OnePlusBleScannerAndroid(
                 else                                                 -> SilentScanState(previousSilentScans + 1, backOff = false)
             }
 
+        internal fun nextFilteredSilentWindows(previous: Int): Int = previous + 1
+
+        internal fun shouldRunUnfilteredThrottleProbe(consecutiveFilteredSilentWindows: Int): Boolean =
+            consecutiveFilteredSilentWindows > 0 &&
+                consecutiveFilteredSilentWindows % UNFILTERED_THROTTLE_PROBE_EVERY == 0
+
+        /**
+         * Direct `onScanFailed` codes that mean the OS refused or starved the scanner.
+         * `ALREADY_STARTED` is not a throttle.
+         */
+        internal fun shouldBackOffOnScanFailed(errorCode: Int): Boolean = when (errorCode) {
+            ScanCallback.SCAN_FAILED_APPLICATION_REGISTRATION_FAILED,
+            ScanCallback.SCAN_FAILED_INTERNAL_ERROR,
+            ScanCallback.SCAN_FAILED_OUT_OF_HARDWARE_RESOURCES,
+            ScanCallback.SCAN_FAILED_SCANNING_TOO_FREQUENTLY -> true
+            else -> false
+        }
+
         fun nameMatches(name: String?): Boolean = OnePlusAdvCandidate.nameMatchesSoft(name)
+
+        /**
+         * The sensor a screen may select on its own, out of what the scan heard.
+         *
+         * Exactly one hit, and only then. The 4-digit code is the KEKS password and is not in the
+         * advertisement, so with two ONE+ in range no score can tell which one the user just
+         * applied: the strongest signal may be the neighbour's, and the best ranked one may be the
+         * sensor being replaced. Picking either would send the user into a five minute connect with
+         * the wrong transmitter. Two or more is a question, and the user answers it by tapping a row.
+         *
+         * Nothing heard means nothing to connect to, so that answer is null as well.
+         */
+        fun autoSelectSingle(devices: List<OnePlusScanResult>): OnePlusScanResult? = devices.singleOrNull()
+
+        /**
+         * The transmitter the start screen may select on its own, given what the scan heard so far.
+         *
+         * Two cases, and the code on screen is what tells them apart:
+         * - The code belongs to the stored sensor, so this is a reconnect or a repair of the session
+         *   already running. That sensor is the answer, even among several: the user is not choosing
+         *   anything new. A live sighting of it is preferred over the stored one, because it carries
+         *   the fresh ADV the driver connects in-window with.
+         * - The code belongs to another sensor. Nothing sticky may apply then, and only a single hit
+         *   may be selected — see [autoSelectSingle].
+         *
+         * Feed it the session from `OnePlusAdvCandidate.scanHintFor`, which is what drops the stored
+         * MAC as soon as the code on screen is another sensor.
+         */
+        fun autoSelect(devices: List<OnePlusScanResult>, hint: OnePlusStoredSession?): OnePlusScanResult? {
+            val storedMac = hint?.lastMac?.takeIf { it.isNotBlank() } ?: return autoSelectSingle(devices)
+            return devices.firstOrNull { it.address.equals(storedMac, ignoreCase = true) }
+                ?: OnePlusScanResult(address = storedMac, name = hint.lastDeviceName, rssi = 0)
+        }
 
         internal fun normalizeTargetAddress(address: String): String = address.uppercase()
 

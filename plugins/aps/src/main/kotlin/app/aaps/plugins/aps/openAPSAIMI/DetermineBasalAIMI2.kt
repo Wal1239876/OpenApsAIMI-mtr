@@ -149,6 +149,7 @@ import app.aaps.plugins.aps.openAPSAIMI.physio.PhysioLatentState
 import app.aaps.plugins.aps.openAPSAIMI.physio.PhysioLatentStateBuilder
 import app.aaps.plugins.aps.openAPSAIMI.physio.SleepLiveDetector
 import app.aaps.plugins.aps.openAPSAIMI.learning.BasalAdaptiveMultiplier
+import app.aaps.plugins.aps.openAPSAIMI.learning.BasalNeuralLearner
 import app.aaps.plugins.aps.openAPSAIMI.physio.CircadianMealProfileStore
 import app.aaps.plugins.aps.openAPSAIMI.physio.UamHypothesisState
 import app.aaps.plugins.aps.openAPSAIMI.physio.UamHypothesisStateBuilder
@@ -214,6 +215,7 @@ import app.aaps.plugins.aps.openAPSAIMI.patient.HarmoniaHarmonizer
 import app.aaps.plugins.aps.openAPSAIMI.patient.HarmoniaProductionDecision
 import app.aaps.plugins.aps.openAPSAIMI.patient.HarmoniaProductionMode
 import app.aaps.plugins.aps.openAPSAIMI.patient.HarmoniaSensorTelemetry
+import app.aaps.plugins.aps.openAPSAIMI.patient.putFiniteOrNull
 import app.aaps.plugins.aps.openAPSAIMI.patient.HarmoniaDecision
 import app.aaps.plugins.aps.openAPSAIMI.patient.HarmoniaDecisionEngine
 import app.aaps.plugins.aps.openAPSAIMI.patient.HarmoniaDecisionEnvironment
@@ -273,6 +275,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.exp
@@ -304,7 +307,19 @@ internal data class AimiDecisionContext(
         val iob_u: Double,
         /** User profile ISF block for this time of day. Static within the tick. */
         val profile_isf_static_mgdl: Double? = null,
-        /** Sensitivity the command actually used for this tick (same value as [profile_isf_mgdl]). */
+        /**
+         * `ctx.profile.sens`, read once at tick bootstrap. Same value as [profile_isf_mgdl] on every
+         * tick, because both are that one read.
+         *
+         * This is **not** the sensitivity the SMB dose used. It reaches two places only: the control
+         * barrier anchor in `AutodriveEngine.profileAnchoredSafetySi`, and the endogenous basal
+         * bridge in `EndogenousBasalBridgePolicy.computeBridgeRateUph`. The delivered SMB is sized
+         * from the fused PKPD sensitivity instead — see [variable_sens_mgdl] for where to read it.
+         *
+         * Even the barrier rarely reads it: `InsulinActionModel.LEGACY_CONTROL_COEFFICIENT` floors
+         * the coefficient at the value for 45 mg/dL/U, and on the 2026-08-15 package the exported
+         * `si_metabolic` sat exactly on that floor on 61 of 72 ticks.
+         */
         val command_isf_mgdl: Double? = null,
         /** Which source produced the dynamic value this tick. See [IsfSourceTelemetry]. */
         val isf_source: String? = null,
@@ -407,14 +422,24 @@ internal data class AimiDecisionContext(
         var rise_floor_spent_u: Double? = null,
         var rise_floor_minutes_since_contribution: Double? = null,
         /**
-         * The sensitivity the dosing path actually uses, in mg/dL/U — `rT.variable_sens`.
+         * The `variableSensitivity` member, in mg/dL/U, read late in the tick.
          *
-         * Every other ISF field here describes what the *predictions* saw. [command_isf_mgdl] carries
-         * `profile.sens`, which comes from a 30-minute bucket cache; the dosing path reads the fresh
-         * `variable_sens`, and the two are not the same number. Measured by inverting the tube
-         * advisor's exported kappa over 194 ticks of the 2026-08-14 package: the ratio spans 0.70 to
-         * 2.65 and the two agree within 0.5 mg/dL/U on 1 tick. Until this field exists, no statement
-         * about "the ISF the dose used" can be checked.
+         * This is a **post-dose** read, not the sensitivity the dose used. It is taken in
+         * `markEstimatorDiagnosticsForExport`, which runs after `applyEndoAndActivityAdjustments`
+         * and `applyIsfBoundsAndPhysioMultipliersAfterEndoActivity` have already multiplied
+         * `variableSensitivity` by the endo, activity and physiological factors, and long after the
+         * MPC and the tube advisor sized the dose.
+         *
+         * The number the delivered dose used is the fused PKPD sensitivity, exported as
+         * `adjustments.intelligence_snapshot_v1.isf.fused_mgdl_per_u`. It is what the MPC reads as
+         * `estimatedSI` and what the tube advisor reports as
+         * `adjustments.tube_advisor.isf_used_mgdl_per_u`. On the 2026-08-15 package the two agreed
+         * on 142 of 160 ticks, while this field agreed with the tube on 0 of 160.
+         *
+         * Do not compare this field with anything dose-related. An earlier note here claimed a 0.70
+         * to 2.65 ratio against [command_isf_mgdl]; that was obtained by inverting the tube's kappa,
+         * which cannot be inverted below about 29.7 mg/dL/U because the curve saturates there. The
+         * direct instruments contradict it.
          */
         var variable_sens_mgdl: Double? = null,
     )
@@ -483,6 +508,14 @@ internal data class AimiDecisionContext(
         var control_barrier: JSONObject? = null,
         /** Lot 2 — invariants terminaux du canal basal: taux avant/apres et invariant liant. */
         var basal_terminal: org.json.JSONObject? = null,
+        /**
+         * Universal Adaptive Basal scaling for this tick: heuristic, learned head, and the blend.
+         *
+         * Carries `n_raw`, the learned value BEFORE the runtime clamp. Only the blended result used to
+         * be exported (as free text in the narrative), so a model stuck on one constant and a model
+         * that had really learned the same number were impossible to tell apart in a log.
+         */
+        var adaptive_basal: JSONObject? = null,
         /** AIMI Harmonia simulated production branch; virtual only, never applied to the real pump. */
         var harmonia_simulation: org.json.JSONObject? = null,
         /** AIMI Harmonia production owner state; basal-first only and safety-gated. */
@@ -906,6 +939,9 @@ internal data class AimiDecisionContext(
             adjustments.basal_terminal?.let { terminal ->
                 adj.put("basal_terminal", terminal)
             }
+            adjustments.adaptive_basal?.let { adaptiveBasal ->
+                adj.put("adaptive_basal", adaptiveBasal)
+            }
             adjustments.harmonia_simulation?.let { simulation ->
                 adj.put("harmonia_simulation", simulation)
             }
@@ -1004,6 +1040,30 @@ private const val MEAL_ADVISOR_MIN_CARB_COVERAGE = 0.25
  * short enough that a genuinely new meal does.
  */
 private const val RISE_FLOOR_REARM_MS = 90L * 60L * 1000L
+
+/**
+ * Stable tags naming which branch of the maxSMB ladder picked the ceiling for a tick.
+ *
+ * Exported as `smb_binding_trace.max_smb_ladder_branch`. The rise floor obeys the ceiling this ladder
+ * picks, so the tag is what tells us afterwards whether the ladder saw a rise (a promoted or partial
+ * branch) or saw nothing at all (`STANDARD`). The two readings mean very different things.
+ *
+ * The `_CLAMPED` twins mean the branch fired and the BG below 120 safety clamp then pulled the
+ * ceiling back down to the standard preference. Without them the tag would report a promotion that
+ * never reached the dose. `STANDARD` has no twin: it already sets the standard preference, so the
+ * clamp cannot lower it further.
+ */
+private const val LADDER_PLATEAU_CRITICAL = "PLATEAU_CRITICAL_BG250"
+private const val LADDER_PLATEAU_CRITICAL_CLAMPED = "PLATEAU_CRITICAL_BG250_CLAMPED"
+private const val LADDER_CONFIRMED_RISE_HIGH = "CONFIRMED_RISE_HIGH"
+private const val LADDER_CONFIRMED_RISE_HIGH_CLAMPED = "CONFIRMED_RISE_HIGH_CLAMPED"
+private const val LADDER_SENSITIVE_85 = "SENSITIVE_85"
+private const val LADDER_SENSITIVE_85_CLAMPED = "SENSITIVE_85_CLAMPED"
+private const val LADDER_PLATEAU_MODERATE_75 = "PLATEAU_MODERATE_75"
+private const val LADDER_PLATEAU_MODERATE_75_CLAMPED = "PLATEAU_MODERATE_75_CLAMPED"
+private const val LADDER_FALLING_60 = "FALLING_60"
+private const val LADDER_FALLING_60_CLAMPED = "FALLING_60_CLAMPED"
+private const val LADDER_STANDARD = "STANDARD"
 
 private const val TIGHT_SPIRAL_CAP_TDD_REFERENCE_U = 55.0
 
@@ -1854,9 +1914,14 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             1.0
         }
         val maxBasalMult = preferences.get(DoubleKey.OApsAIMIMaxMultiplier).coerceIn(1.0, 2.5)
+        // H channel floor: 0.70, and on purpose NOT the 0.80 of the learned N channel
+        // (BasalNeuralLearner.RUNTIME_BASAL_FLOOR). BasalAdaptiveMultiplier.combine keeps the smaller
+        // channel as soon as either one is defensive, so an applied 0.70 can come from H alone. That is
+        // why h_mult_raw / h_mult live next to n_raw / n_source in adjustments.adaptive_basal. Raising
+        // this floor to 0.80 is a therapy decision that needs field evidence, so it stays at 0.70.
         val hMult = hMultRaw.coerceIn(0.70, maxBasalMult)
-        val nMult = if (adaptiveBasalEnabled) {
-            basalNeuralLearner.getUniversalBasalMultiplier(
+        val nDecision = if (adaptiveBasalEnabled) {
+            basalNeuralLearner.getUniversalBasalDecision(
                 bg = ctx.glucoseStatus.glucose,
                 basal = ctx.profile.current_basal,
                 accel = accel,
@@ -1865,15 +1930,50 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 iob = iobObj.iob,
                 physioFeatures = currentBasalPhysioFeatures()
             )
-        } else 1.0
+        } else null
+        val nMult = nDecision?.multiplier ?: 1.0
         adaptiveMult = BasalAdaptiveMultiplier.combine(hMult, nMult)
         if (Math.abs(adaptiveMult - 1.0) > 0.01) {
             consoleLog.add("🛡️ BASAL_UNIFIED_SCALING: H=${"%.2f".format(hMult)}x / N=${"%.2f".format(nMult)}x -> Applied=${"%.2f".format(adaptiveMult)}x")
         }
+        lastAdaptiveBasalTrace = buildAdaptiveBasalTrace(hMultRaw, hMult, nDecision, adaptiveMult)
         val isConfirmedHighRiseLocal =
             ctx.glucoseStatus.glucose > 150.0 && ctx.glucoseStatus.combinedDelta > 1.5 && (ctx.glucoseStatus.bgAcceleration ?: 0.0) > 0.4
         applyThyroidModule(ctx.profile)
         return isConfirmedHighRiseLocal
+    }
+
+    /**
+     * Builds the `adjustments.adaptive_basal` block of AIMI_Decisions.jsonl.
+     *
+     * `n_raw` is the point of this block: it is the learned value BEFORE the runtime clamp. A model
+     * that returns one constant and a model that really learned that number produce the same `n_mult`,
+     * and the JSONL used to carry only the blended result, as free text inside `outcome.narrative`.
+     *
+     * The two channels do not share a floor: N clamps at 0.80
+     * (`BasalNeuralLearner.RUNTIME_BASAL_FLOOR`) while H still clamps at 0.70, and the blend keeps the
+     * smaller one when either is defensive. So `h_mult_raw` / `h_mult` and `n_raw` / `n_source` together
+     * are what tells a saturated clamp from a model that really learned that value — the question that
+     * two field reports of "exactly 0.70 on every tick", 40 days apart, could not answer.
+     */
+    private fun buildAdaptiveBasalTrace(
+        hMultRaw: Double,
+        hMult: Double,
+        nDecision: BasalNeuralLearner.UniversalBasalDecision?,
+        combined: Double,
+    ): JSONObject = JSONObject().apply {
+        put("h_mult_raw", hMultRaw)
+        put("h_mult", hMult)
+        put("n_mult", nDecision?.multiplier ?: 1.0)
+        put("n_raw", nDecision?.rawValue ?: JSONObject.NULL)
+        put("n_source", (nDecision?.source ?: BasalNeuralLearner.BasalMultiplierSource.DISABLED).name.lowercase(Locale.US))
+        put("n_clamped", nDecision?.clamped ?: false)
+        put("n_floor", nDecision?.floor ?: JSONObject.NULL)
+        put("n_ceiling", nDecision?.ceiling ?: JSONObject.NULL)
+        put("combined", combined)
+        val gov = basalNeuralLearner.getGovernanceSnapshot()
+        put("governance_action", gov.action.name)
+        put("governance_basal_floor", gov.activeBasalFloor ?: JSONObject.NULL)
     }
 
     /**
@@ -1891,6 +1991,11 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         lastSmbCapped = 0.0
         lastSmbFinal = 0.0
         lastSmbBindingTraceDraft = SmbBindingTrace.Draft(timestampMs = ctx.currentTime)
+        // The maxSMB ladder runs later in the tick, and a tick can abort before it. Without this
+        // reset the export would stamp the previous tick's branch tag and slope onto an otherwise
+        // empty trace, and a reader could not tell. Null means "the ladder did not run this tick".
+        lastMaxSmbLadderBranch = null
+        lastSlopeFromMinDeviation = null
         // Effort reduction telemetry is per tick — a basal-only tick must export null, not the last
         // SMB tick's multiplier.
         lastEffortSmbFactorRaw = null
@@ -2151,8 +2256,14 @@ class DetermineBasalaimiSMB2 @Inject constructor(
 
     /**
      * T9 G6 lead log, physio multipliers + trace, early PKPD + [cachedPkpdRuntime], physio/inflammation
-     * mutations, TAP-G peak governor echo (prefs), straight-line tube advisor (`effectiveDiaH` from PKPD or profile DIA).
+     * mutations, TAP-G peak governor echo (prefs).
      * Same effect order as historical inline block. **Not** BYODA combinedΔ — that is [runCombinedDeltaByodaAndDynamicPeak].
+     *
+     * This function does **not** run the straight-line tube advisor, and the `effectiveDiaH` local it
+     * computes reaches nothing: it is written and never read. The tube runs once per tick from
+     * `publishDoseTerminalAuthorityAndSnapshot`, after the gated dose terminals exist, and it takes
+     * its DIA from the `tickEffectiveDiaHours` member, not from that local. See the note above the
+     * return statement below.
      *
      * @return Pump age from [pumpAgeDaysCached] and [physioMultipliers] for the rest of the tick (trajectory / caps).
      */
@@ -2494,11 +2605,16 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         // Solution: Use maxSMBHB if EITHER:
         //   1. Active rise detected (slope >= 1.0) - Original logic
         //   2. High plateau (BG >= 250) - NEW, regardless of slope
+        // The rise floor obeys whichever ceiling this ladder picks, so remember the branch and the
+        // slope it read. Both go out in `smb_binding_trace` so the next package can say whether the
+        // ladder we now trust is reading the rise correctly.
+        this.lastSlopeFromMinDeviation = ctx.mealData.slopeFromMinDeviation.takeIf { it.isFinite() }
         this.maxSMB = when {
             // 🚨 CRITICAL PLATEAU: BG >= 250, regardless of slope
             // Absolute emergency if BG catastrophic, even with low delta
             // Protection: Don't apply if rapid fall (delta <= -5)
             bg >= 250 && combinedDelta > -5.0 -> {
+                this.lastMaxSmbLadderBranch = LADDER_PLATEAU_CRITICAL
                 consoleLog.add("MAXSMB_PLATEAU_CRITICAL BG=${bg.roundToInt()} Δ=${String.format("%.1f", combinedDelta)} slope=${String.format("%.2f", ctx.mealData.slopeFromMinDeviation)} -> maxSMBHB=${String.format("%.2f", maxSMBHB)}U (plateau)")
                 maxSMBHB
             }
@@ -2508,6 +2624,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             // Added combinedDelta check to confirm rise is real
             (bg >= 140 && !honeymoon && ctx.mealData.slopeFromMinDeviation >= 1.0 && combinedDelta > 0.5) ||
             (bg >= 180 && honeymoon && ctx.mealData.slopeFromMinDeviation >= 1.4 && combinedDelta > 0.5) -> {
+                this.lastMaxSmbLadderBranch = LADDER_CONFIRMED_RISE_HIGH
                 consoleLog.add("MAXSMB_SLOPE_HIGH BG=${bg.roundToInt()} slope=${String.format("%.2f", ctx.mealData.slopeFromMinDeviation)} \u0394=${String.format("%.1f", combinedDelta)} -> maxSMBHB=${String.format("%.2f", maxSMBHB)}U (confirmed rise)")
                 maxSMBHB
             }
@@ -2516,6 +2633,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             // 85% maxSMBHB for extra caution close to target
             // Added combinedDelta check to confirm rise is real
             bg >= 120 && bg < 140 && !honeymoon && ctx.mealData.slopeFromMinDeviation >= 1.0 && combinedDelta > 0.5 -> {
+                this.lastMaxSmbLadderBranch = LADDER_SENSITIVE_85
                 val partial = max(maxSMB, maxSMBHB * 0.85)
                 consoleLog.add("MAXSMB_SLOPE_SENSITIVE BG=${bg.roundToInt()} slope=${String.format("%.2f", ctx.mealData.slopeFromMinDeviation)} \u0394=${String.format("%.1f", combinedDelta)} -> ${String.format("%.2f", partial)}U (85% maxSMBHB - confirmed rise)")
                 partial
@@ -2524,6 +2642,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             // 🟠 MODERATE PLATEAU: BG 200-250, stable delta
             // Compromise: 75% of maxSMBHB for elevated but not critical BG
             bg >= 200 && bg < 250 && combinedDelta > -3.0 && combinedDelta < 3.0 -> {
+                this.lastMaxSmbLadderBranch = LADDER_PLATEAU_MODERATE_75
                 val partial = max(maxSMB, maxSMBHB * 0.75)
                 consoleLog.add("MAXSMB_PLATEAU_MODERATE BG=${bg.roundToInt()} Δ=${String.format("%.1f", combinedDelta)} -> ${String.format("%.2f", partial)}U (75% maxSMBHB)")
                 partial
@@ -2532,6 +2651,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             // 🔵 FALLING PROTECTION: BG elevated but falling moderately
             // Partial limit to avoid over-correction while still allowing some action
             bg > 180 && combinedDelta <= -3.0 && combinedDelta > -8.0 -> {
+                this.lastMaxSmbLadderBranch = LADDER_FALLING_60
                 val partial = max(maxSMB, maxSMBHB * 0.6)
                 consoleLog.add("MAXSMB_FALLING BG=${bg.roundToInt()} Δ=${String.format("%.1f", combinedDelta)} -> ${String.format("%.2f", partial)}U (60% maxSMBHB)")
                 partial
@@ -2539,6 +2659,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
 
             // ⚪ STANDARD: Normal/low BG conditions
             else -> {
+                this.lastMaxSmbLadderBranch = LADDER_STANDARD
                 consoleLog.add("MAXSMB_STANDARD BG=${bg.roundToInt()} -> ${String.format("%.2f", maxSMB)}U")
                 maxSMB
             }
@@ -2549,6 +2670,16 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         val stdMaxSMB = preferences.get(DoubleKey.OApsAIMIMaxSMB)
         if (bg < 120.0 && this.maxSMB > stdMaxSMB) {
              this.maxSMB = stdMaxSMB
+             // The exported branch tag must show that the clamp won, otherwise the tag reports a
+             // promotion that never reached the dose.
+             this.lastMaxSmbLadderBranch = when (this.lastMaxSmbLadderBranch) {
+                 LADDER_PLATEAU_CRITICAL    -> LADDER_PLATEAU_CRITICAL_CLAMPED
+                 LADDER_CONFIRMED_RISE_HIGH -> LADDER_CONFIRMED_RISE_HIGH_CLAMPED
+                 LADDER_SENSITIVE_85        -> LADDER_SENSITIVE_85_CLAMPED
+                 LADDER_PLATEAU_MODERATE_75 -> LADDER_PLATEAU_MODERATE_75_CLAMPED
+                 LADDER_FALLING_60          -> LADDER_FALLING_60_CLAMPED
+                 else                       -> LADDER_STANDARD
+             }
              consoleLog.add("🔒 STRICT CLAMP: BG<120 -> Forced Standard MaxSMB (${String.format("%.2f", stdMaxSMB)}U)")
         }
         val ngrConfig = buildNightGrowthResistanceConfig(ctx.profile, ctx.autosensData, glucoseStatus, targetBg.toDouble())
@@ -5178,7 +5309,6 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 hints = mpcHints,
             )
             lastHtrRaFloorMgdlPerMin = mpcHints.estimatedRaFloorMgdlPerMin.takeIf { it > 0.0 }
-            markHtrRaFloorForExport(lastHtrRaFloorMgdlPerMin, estimatedRaForMpc)
 
             val adState = app.aaps.plugins.aps.openAPSAIMI.autodrive.models.AutoDriveState.createSafe(
                 bg = ctx.glucoseStatus.glucose,
@@ -5225,6 +5355,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 consoleLog.add("🤖 SENSOR_AWARE: One+ Detected -> Fast Sensor, Real-Time Maths Engaged (no G6 lead).")
             } else if (adState.sourceSensor == SourceSensor.DEXCOM_G7_NATIVE) {
                 consoleLog.add("🤖 SENSOR_AWARE: G7 Detected -> Fast Sensor, Real-Time Maths Engaged.")
+            } else if (adState.sourceSensor == SourceSensor.LIBRE_3_NATIVE) {
+                consoleLog.add("🤖 SENSOR_AWARE: Libre 3 native Detected -> Fast Sensor, Real-Time Maths Engaged (no G6 lead).")
             }
 
             autodriveEngine.setShadowMode(false)
@@ -5244,6 +5376,17 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 observationId = raObservationId(ctx),
                 engaged = true,
             )
+
+            // Called here, after `tick`, and not before it. The barrier fields this reads
+            // (`lastProfileIsfSeen`, `lastCbfPermittedU`, `lastBarrierDiagnostics`, the two control
+            // coefficients) are written inside `tick`. Read before the call, they still held the
+            // previous tick's values, so the whole `control_barrier` block and
+            // `cbf_profile_isf_mgdl` were exported one tick late. Measured on three support
+            // packages: `cbf_profile_isf_mgdl` matched the previous tick's `command_isf_mgdl` on
+            // 75/89, 96/105 and 116/127 ticks, and the current tick's on 13/90, 17/106 and 28/127.
+            // Both arguments are computed above and are not touched in between, so the two Ra
+            // fields keep exactly the values they had before.
+            markHtrRaFloorForExport(lastHtrRaFloorMgdlPerMin, estimatedRaForMpc)
 
             val v3CommandSafe = adCommand != null && adCommand.isSafe
             if (v3CommandSafe) {
@@ -5285,7 +5428,11 @@ class DetermineBasalaimiSMB2 @Inject constructor(
 
             val v3SmbModel = if (v3CommandSafe) adCommand!!.scheduledMicroBolus ?: 0.0 else 0.0
             val iobHeadroomForFloor = (maxIob - iob).coerceAtLeast(0.0)
-            val smbCeilingForFloor = maxOf(maxSMB, maxSMBHB).coerceAtLeast(0.0)
+            // The maxSMB ladder above already decided whether this tick earns the high-BG ceiling.
+            // The rise floor must not overrule that decision, so it stops at the ceiling the ladder
+            // actually chose. Using `max(maxSMB, maxSMBHB)` here handed the floor the high-BG ceiling
+            // even on ticks where the ladder had refused it.
+            val smbCeilingForFloor = maxSMB.coerceAtLeast(0.0)
             val v3SmbFloor = if (v3CommandSafe) {
                 aggressiveRiseSmbFloorU(bg, combinedDelta, shortAvgDeltaAdj)
                     .coerceAtMost(minOf(smbCeilingForFloor, iobHeadroomForFloor))
@@ -9013,16 +9160,22 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             )
             decisionCtx.adjustments.recursive_belief = UnfoldExporter.toJsonObject(export)
             snap.resolutions.harmoniaSmb?.let { smb ->
-                harmoniaSmbAuthorityJson = org.json.JSONObject().apply {
-                    put("mode", smb.authorityMode ?: JSONObject.NULL)
-                    put("smb_u", smb.demandAfterU)
-                    put("demand_before_u", smb.demandBeforeU)
-                    put("max_smb_cap_u", smb.maxSmbCapU)
-                    put("adds_smb_authority", smb.addsSmbAuthority)
-                    put("insulin_intent", smb.insulinIntent ?: JSONObject.NULL)
-                    put("reason_codes", org.json.JSONArray(smb.reasonCodes))
-                    put("source", "harmonia_smb_authority_v1")
-                }
+                // Prefer the arbiter's own record. Its `demand_before_u` is the demand BEFORE the
+                // lift, and it also carries `mpc_demand_u`, `envelope_max_u`,
+                // `catalog_proposed_cap_u` and the arbiter reasons. The rebuilt record below reads
+                // `demand_before_u` AFTER the lift was already applied, so a lift always measured as
+                // zero. Fall back to it only on a tick where no arbiter ran.
+                harmoniaSmbAuthorityJson = smb.authorityDecision?.toJsonObject()
+                    ?: JSONObject().apply {
+                        put("mode", smb.authorityMode ?: JSONObject.NULL)
+                        putFiniteOrNull("smb_u", smb.demandAfterU)
+                        putFiniteOrNull("demand_before_u", smb.demandBeforeU)
+                        putFiniteOrNull("max_smb_cap_u", smb.maxSmbCapU)
+                        put("adds_smb_authority", smb.addsSmbAuthority)
+                        put("insulin_intent", smb.insulinIntent ?: JSONObject.NULL)
+                        put("reason_codes", JSONArray(smb.reasonCodes))
+                        put("source", "harmonia_smb_authority_v1")
+                    }
                 decisionCtx.adjustments.harmonia_smb_authority = harmoniaSmbAuthorityJson
             }
         }
@@ -9081,6 +9234,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         decisionCtx.adjustments.tube_advisor = lastTubeAdvisorTrace
         decisionCtx.adjustments.pkpd_soft_floor = lastPkpdSoftFloorTelemetry?.toJsonObject()
         decisionCtx.adjustments.basal_terminal = lastBasalTerminalTelemetry
+        decisionCtx.adjustments.adaptive_basal = lastAdaptiveBasalTrace
         decisionCtx.adjustments.harmonia_simulation = lastHarmoniaDecision?.toJsonObject()
         decisionCtx.adjustments.harmonia_production = lastHarmoniaProductionDecision?.toJsonObject()
         decisionCtx.adjustments.t3c_runtime_ownership = lastT3cRuntimeOwnership
@@ -9107,7 +9261,14 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             ),
         )
         val bindingFinalU = terminalSmbAmountU
-        val bindingExportDraft = lastSmbBindingTraceDraft.appendStage(
+        // Written here, after the RT is final, because this is the one point every export path goes
+        // through — the same reason `markEstimatorDiagnosticsForExport` writes its fields late. The
+        // three draft copy sites do not all run on every tick, so setting the ladder fields there
+        // would leave them null on the paths that skip that site.
+        val bindingExportDraft = lastSmbBindingTraceDraft.copy(
+            maxSmbLadderBranch = lastMaxSmbLadderBranch,
+            slopeFromMinDeviation = lastSlopeFromMinDeviation,
+        ).appendStage(
             "FINAL",
             bindingFinalU,
             bindingFinalU,
@@ -10708,6 +10869,18 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     /** 🔒 Lot 2 — dernier verdict des invariants terminaux du tick, exporté en JSON structuré. */
     private var lastBasalTerminalTelemetry: org.json.JSONObject? = null
 
+    /** Universal Adaptive Basal scaling trace for this tick; exported as `adjustments.adaptive_basal`. */
+    private var lastAdaptiveBasalTrace: JSONObject? = null
+
+    /**
+     * Carbs on board (g) read at the start of the current tick, for the basal-learning CSV.
+     *
+     * It is reset to `NaN` on every tick on purpose. A row written before the tick has read `mealData`
+     * then says "not reported" instead of repeating the carbs of the previous tick. See
+     * [basalLearningCobGrams].
+     */
+    private var tickCobGrams: Double = Double.NaN
+
     /** 🔭 Lot 0 — `true` dès qu'une ligne `AIMI_Decisions.jsonl` a été écrite pour le tick courant. */
     private var aimiDecisionExportedThisTick: Boolean = false
 
@@ -10804,6 +10977,20 @@ class DetermineBasalaimiSMB2 @Inject constructor(
 
     /** When the floor last contributed, so a fresh rise can re-arm the budget. */
     private var lastRiseFloorContributionMs: Long = 0L
+
+    /**
+     * Which branch of the maxSMB ladder fired this tick, and the slope it read.
+     *
+     * The rise floor now obeys the ceiling this ladder picks, so we must be able to see whether the
+     * ladder is sane. Measured on 2026-08-15: on the two rises that ended below 70 mg/dL the ladder
+     * stayed on `STANDARD` while BG climbed 7 to 12 mg/dL per 5 minutes, and the only condition that
+     * can have failed there is `slopeFromMinDeviation >= 1.0`. We cannot tell from the exports alone
+     * whether the slope was right or simply blind, so both values are written out.
+     *
+     * See [SmbBindingTrace] fields `max_smb_ladder_branch` and `slope_from_min_deviation`.
+     */
+    private var lastMaxSmbLadderBranch: String? = null
+    private var lastSlopeFromMinDeviation: Double? = null
 
     /**
      * Deltas the end-of-tick safety net feeds the estimator with.
@@ -10912,6 +11099,13 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     // Survives instance re-creations and app restarts by combining Memory + SharedPreferences.
         companion object {
         private var lastSmbTimestampMem: Long = 0L
+
+        /**
+         * Lookback (minutes) used to report the non-basal insulin of one basal-learning row. Slightly
+         * longer than the 5-minute loop tick, so a bolus written a few seconds late is still reported.
+         * See `basalLearningBolusUnits`.
+         */
+        private const val BASAL_LEARN_BOLUS_LOOKBACK_MIN = 6L
 
         // 🩸 Limiteur de pente MONTANTE de la basale (anti-whiplash). Voir [slewLimitBasalUp].
         private const val BASAL_SLEW_UP_ABS_MIN_UPH = 1.5    // hausse mini autorisée par tick (permet de repartir de 0)
@@ -13722,6 +13916,11 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                     context.getString(R.string.reason_safety_sport_meal_reduction, before, smbToGive)
                 )
             } else {
+                // Sport is a vital safety, not a minor one, so Red Carpet must not put this back.
+                // Without this flag the zero below counted as a minor cut: measured 2026-08-18, the
+                // sport guard zeroed four ticks between 19:32 and 19:57 and Red Carpet restored
+                // 6.52 U, which took BG from 168.8 down to 50.6 after a three hour hike.
+                criticalSafetyZeroedThisTick = true
                 reason?.appendLine(context.getString(R.string.safety_sport_smb_zero))
                 consoleLog.add("SMB forced to 0 by sport safety guard")
                 return 0f
@@ -16710,6 +16909,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
 
     private fun runDetermineBasalTickInner(ctx: AimiTickContext): RT {
         val profile = ctx.profile
+        // Causal censoring of the basal label needs the carbs of THIS tick, and the basal-learning hook
+        // runs on paths that have no access to `ctx`. See [basalLearningCobGrams].
+        tickCobGrams = ctx.mealData.mealCOB.takeIf { it.isFinite() && it >= 0.0 } ?: Double.NaN
         val (
             originalProfile,
             isExplicitAdvisorRun,
@@ -17791,6 +17993,11 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     /**
      * Records one basal-neural CSV row, triggers async ML training, and logs BASAL_GOV.
      * Shared by the main post-engine path and [logDecisionFinal] early exits.
+     *
+     * The row also carries the two causal facts of the label window that opens at this tick: the
+     * non-basal insulin ([basalLearningBolusUnits]) and the carbs on board ([basalLearningCobGrams]).
+     * Without them the trainer cannot tell a basal response from a bolus or a meal, and every row is
+     * kept as "legacy, nothing proven". See [BasalNeuralLearner.updateLearning].
      */
     private fun applyBasalNeuralLearningAndTraining(
         rT: RT,
@@ -17798,6 +18005,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         govTag: String,
     ) {
         val eventual = (rT.eventualBG ?: lastEventualBgSnapshot)
+        val windowBolusU = basalLearningBolusUnits(rT)
+        val windowCobG = basalLearningCobGrams(rT)
         basalNeuralLearner.updateLearning(
             bgBefore = bg,
             bgAfter = eventual,
@@ -17811,6 +18020,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             sensorNoise = lastLoopCgmNoise,
             shortMinPredBg = minPredictedAcrossCurves(rT.predBGs),
             physioFeatures = currentBasalPhysioFeatures(),
+            bolusInsulinU = windowBolusU,
+            cobGrams = windowCobG,
         )
         triggerBasalMlTrainingIfNeeded()
         val gov = basalNeuralLearner.getGovernanceSnapshot()
@@ -17822,8 +18033,66 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 "mae=${"%.1f".format(Locale.US, gov.meanAbsTargetError)} latch=${gov.hypoHoldLatched} " +
                 "floorB=${gov.activeBasalFloor?.let { "%.2f".format(Locale.US, it) } ?: "-"} " +
                 "floorA=${gov.activeAggressivenessFloor?.let { "%.2f".format(Locale.US, it) } ?: "-"} " +
+                "wBolus=${if (windowBolusU.isFinite()) "%.2f".format(Locale.US, windowBolusU) else "?"}U " +
+                "wCob=${if (windowCobG.isFinite()) "%.0f".format(Locale.US, windowCobG) else "?"}g " +
                 "reason=${gov.reason}"
         )
+    }
+
+    /**
+     * Non-basal insulin (U) that belongs to the label window opening at this tick.
+     *
+     * The basal label reads the BG move of the next 30 minutes as basal work, so the trainer must know
+     * whether insulin outside basal entered that window. Two sources are added:
+     * - the SMB this tick asks for ([RT.units]). It is known here, synchronously, before the pump and
+     *   the database know about it.
+     * - every SMB or manual bolus already recorded in the last [BASAL_LEARN_BOLUS_LOOKBACK_MIN]
+     *   minutes. This is what catches a bolus the user gave by hand, and also the SMB of the previous
+     *   tick while the bolus cache was still catching up.
+     *
+     * The same SMB can therefore be reported on two rows in a row, and an SMB that the loop finally
+     * drops (it can be gated behind a temp-basal confirmation) is still reported. Both are on purpose:
+     * the trainer only compares this number with a small threshold, so a repeat marks one extra row as
+     * contaminated. Losing a training row costs little; teaching the model that bolus work was basal
+     * work is the failure this whole path exists to stop.
+     *
+     * `NaN` means "not reported" and sends the trainer back to its IOB-jump heuristic. It is returned
+     * when the bolus history cannot be read, because a partial sum would look like a proven clean
+     * window.
+     *
+     * PRIMING boluses are left out: that insulin never reaches the body.
+     *
+     * `internal` so the engine tests can read what the tick reports, instead of only checking that some
+     * number was written.
+     */
+    internal fun basalLearningBolusUnits(rT: RT): Double {
+        val smbNowU = (rT.units ?: 0.0).coerceAtLeast(0.0)
+        val recentU = try {
+            val since = dateUtil.now() - BASAL_LEARN_BOLUS_LOOKBACK_MIN * 60_000L
+            getBolusesFromTimeCached(since, ascending = false)
+                .filter { it.type == BS.Type.SMB || it.type == BS.Type.NORMAL }
+                .sumOf { it.amount }
+        } catch (e: Exception) {
+            aapsLogger.error(LTag.APS, "BasalLearning: recent bolus read failed, window reported as unknown", e)
+            return Double.NaN
+        }
+        val total = smbNowU + recentU
+        return if (total.isFinite()) total else Double.NaN
+    }
+
+    /**
+     * Carbs on board (g) for the label window opening at this tick.
+     *
+     * [tickCobGrams] is the value read from `mealData` at the start of the tick, so it is present on
+     * every path, including the early exits. [RT.COB] is the fallback, since only the main path fills
+     * it. `NaN` means "not reported": a tick that ended before reading `mealData` must not claim zero
+     * carbs.
+     *
+     * `internal` for the same reason as [basalLearningBolusUnits].
+     */
+    internal fun basalLearningCobGrams(rT: RT): Double {
+        tickCobGrams.takeIf { it.isFinite() && it >= 0.0 }?.let { return it }
+        return rT.COB?.takeIf { it.isFinite() && it >= 0.0 } ?: Double.NaN
     }
 
     private fun triggerBasalMlTrainingIfNeeded() {

@@ -2,7 +2,8 @@ package app.aaps.plugins.dexcomoneplus
 
 import android.content.Context
 import android.os.SystemClock
-import android.util.Log
+import app.aaps.core.interfaces.ble.BleRadioPriority
+import app.aaps.plugins.dexcomoneplus.gatt.OnePlusGattClient
 import app.aaps.plugins.dexcomoneplus.gatt.OnePlusGattClientAndroid
 import app.aaps.plugins.dexcomoneplus.identity.OnePlusSensorIdentity
 import app.aaps.plugins.dexcomoneplus.identity.OnePlusSensorStore
@@ -12,9 +13,11 @@ import app.aaps.plugins.dexcomoneplus.oem.OemDeviceProfile
 import app.aaps.plugins.dexcomoneplus.scan.OnePlusBleScanner
 import app.aaps.plugins.dexcomoneplus.scan.OnePlusBleScannerAndroid
 import app.aaps.plugins.dexcomoneplus.scan.OnePlusBleScannerStub
+import app.aaps.plugins.dexcomoneplus.scan.OnePlusScanBudget
 import app.aaps.plugins.dexcomoneplus.scan.OnePlusScanListener
 import app.aaps.plugins.dexcomoneplus.scan.OnePlusScanResult
 import app.aaps.plugins.dexcomoneplus.session.OnePlusBleSession
+import app.aaps.plugins.dexcomoneplus.session.OnePlusMacArbiter
 import app.aaps.plugins.dexcomoneplus.session.OnePlusBleSessionSkeleton
 import app.aaps.plugins.dexcomoneplus.session.OnePlusConnectPrep
 import app.aaps.plugins.dexcomoneplus.session.OnePlusSessionAuthKeks
@@ -83,6 +86,17 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
     @Volatile
     private var pendingAdvSightingElapsedMs: Long = 0L
 
+    /**
+     * The link of the running session, kept only so its connection interval can be changed while
+     * the session itself is busy. Never used to send anything.
+     */
+    @Volatile
+    private var currentGatt: OnePlusGattClient? = null
+
+    /** True while another job on the same radio must not be disturbed. See [setRadioBackOff]. */
+    @Volatile
+    private var radioBackOff = false
+
     override fun setContext(context: Context) {
         val app = context.applicationContext
         this.context = app
@@ -108,20 +122,28 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
     }
 
     override fun startScan(listener: OnePlusScanListener) {
-        Log.i(OnePlusLogMarkers.TAG, "${OnePlusLogMarkers.SCAN}: [$slot] start")
+        OnePlusLog.i("${OnePlusLogMarkers.SCAN}: [$slot] start")
         scanner.startScan(listener)
     }
 
     override fun stopScan() {
-        Log.i(OnePlusLogMarkers.TAG, "${OnePlusLogMarkers.SCAN}: [$slot] stop")
+        OnePlusLog.i("${OnePlusLogMarkers.SCAN}: [$slot] stop")
         scanner.stopScan()
     }
 
     override fun connect(deviceAddress: String, pairingCode: String) {
-        Log.i(
-            OnePlusLogMarkers.TAG,
+        OnePlusLog.i(
             "${OnePlusLogMarkers.SESSION}: [$slot] connect requested (Real GATT+KEKS+EGV)",
         )
+        // The transmitter has one owner — see OnePlusMacArbiter. Refused means the other slot is on
+        // this sensor, and opening a second session would corrupt both KEKS handshakes. Nothing is
+        // written to the store on a refusal: the slot must stay exactly as it was.
+        if (!OnePlusMacArbiter.claim(deviceAddress, slot)) {
+            watchers.forEach {
+                it.onError("ONEPLUS_SESSION: sensor already in use by the other slot", false)
+            }
+            return
+        }
         scanner.stopScan()
         // Stop any in-flight reconnect loop (may still be targeting a previous MAC).
         val previousSession: OnePlusBleSession?
@@ -165,7 +187,7 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
                     try {
                         created.startWithPairingCode(deviceAddress, pairingCode)
                     } catch (t: Throwable) {
-                        Log.e(OnePlusLogMarkers.TAG, "${OnePlusLogMarkers.ERROR}: [$slot] ${t.message}", t)
+                        OnePlusLog.e("${OnePlusLogMarkers.ERROR}: [$slot] ${t.message}", t)
                         watchers.forEach {
                             it.onError(t.message ?: "ONEPLUS_CONNECT_FAILED", fatal = false)
                             it.onWarmup(
@@ -179,8 +201,7 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
                 }
             }
         } catch (t: Throwable) {
-            Log.e(
-                OnePlusLogMarkers.TAG,
+            OnePlusLog.e(
                 "${OnePlusLogMarkers.ERROR}: [$slot] connect queue ${t.message}",
                 t,
             )
@@ -197,20 +218,26 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
     fun resumeStoredSession(): Boolean {
         val stored = sensorStore?.load()
         if (!OnePlusCgmDriverResumePolicy.canResume(stored)) {
-            Log.i(
-                OnePlusLogMarkers.TAG,
+            OnePlusLog.i(
                 "${OnePlusLogMarkers.SESSION}: [$slot] auto-resume skipped — stored session incomplete",
             )
             return false
         }
         val deviceAddress = stored?.lastMac ?: return false
+        // The path that reproduced the collision on every plugin start for an install whose two
+        // stores already held the same MAC. Claim before queueing anything.
+        if (!OnePlusMacArbiter.claim(deviceAddress, slot)) {
+            OnePlusLog.w(
+                "${OnePlusLogMarkers.SESSION}: [$slot] auto-resume skipped — the other slot owns this sensor",
+            )
+            return false
+        }
         val pairingCode = stored.identity.pin
         val generation: Long
         val executor: ExecutorService
         synchronized(lifecycleLock) {
             if (resumeQueued || session != null) {
-                Log.i(
-                    OnePlusLogMarkers.TAG,
+                OnePlusLog.i(
                     "${OnePlusLogMarkers.SESSION}: [$slot] auto-resume already active",
                 )
                 return false
@@ -224,8 +251,7 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
             pendingAdvSightingElapsedMs = 0L
             (scanner as? OnePlusBleScannerAndroid)?.sessionHint = stored
         }
-        Log.i(
-            OnePlusLogMarkers.TAG,
+        OnePlusLog.i(
             "${OnePlusLogMarkers.SESSION}: [$slot] auto-resume queued mac=***${deviceAddress.takeLast(5)} " +
                 "savedKey=true newStart=false",
         )
@@ -249,8 +275,7 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
                                 session = null
                             }
                         }
-                        Log.e(
-                            OnePlusLogMarkers.TAG,
+                        OnePlusLog.e(
                             "${OnePlusLogMarkers.ERROR}: [$slot] auto-resume ${t.message}",
                             t,
                         )
@@ -266,8 +291,7 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
                     resumeQueued = false
                 }
             }
-            Log.e(
-                OnePlusLogMarkers.TAG,
+            OnePlusLog.e(
                 "${OnePlusLogMarkers.ERROR}: [$slot] auto-resume queue ${t.message}",
                 t,
             )
@@ -302,6 +326,7 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
             session.also { session = null }
         }
         previousSession?.stop("disconnect")
+        OnePlusMacArbiter.release(slot)
     }
 
     override fun shutdown() {
@@ -325,7 +350,28 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
         }
         watchers.clear()
         previousExecutor.shutdownNow()
-        Log.i(OnePlusLogMarkers.TAG, "${OnePlusLogMarkers.SESSION}: [$slot] shutdown")
+        OnePlusMacArbiter.release(slot)
+        OnePlusLog.i("${OnePlusLogMarkers.SESSION}: [$slot] shutdown")
+    }
+
+    /**
+     * ⚠️ ASYNC IMPACT: called from the thread that watches the lease, not from the BLE executor. It
+     * sets a flag, asks for an interval and books a hold on the scan budget, none of which waits,
+     * so it does not have to queue behind a running session.
+     */
+    override fun setRadioBackOff(backOff: Boolean) {
+        if (radioBackOff == backOff) return
+        radioBackOff = backOff
+        OnePlusLog.i("${OnePlusLogMarkers.SESSION}: [$slot] radio back off = $backOff")
+        currentGatt?.setLowPower(backOff)
+        // A scan is the greedy part, so it is the part that has to wait. The budget already knows
+        // how to hold every start back; the hold is sized to the longest a lease can live and it is
+        // lifted as soon as the lease really ends.
+        if (backOff) {
+            OnePlusScanBudget.lendRadioOut(SystemClock.elapsedRealtime(), BleRadioPriority.MAX_HOLD_MS)
+        } else {
+            OnePlusScanBudget.takeRadioBack()
+        }
     }
 
     override fun warmupState(): OnePlusWarmupState =
@@ -339,6 +385,9 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
     ): OnePlusBleSession {
         val ctx = context ?: error("ONEPLUS_SESSION: setContext required")
         val gatt = OnePlusGattClientAndroid(ctx, profile)
+        currentGatt = gatt
+        // The lease may have been taken while this session was being built.
+        if (radioBackOff) gatt.setLowPower(true)
         val auth = OnePlusSessionAuthKeks(gatt)
         val store = sensorStore
         val created = OnePlusBleSessionSkeleton(
@@ -367,7 +416,7 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
             },
             // Auto-resume always passes false; only an explicit new-sensor connect may start.
             requestNewSensorStart = requestNewSensorStart,
-            beforeConnect = { address, attempt -> prepareConnect(address, attempt) },
+            beforeConnect = { address, attempt, scanMs -> prepareConnect(address, attempt, scanMs) },
             savedSharedKeyProvider = { store?.load()?.sharedKey },
             onAuthSuccess = { address, key ->
                 ifCurrentOperation(generation) {
@@ -381,8 +430,7 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
                 ifCurrentOperation(generation) {
                     store?.clearSharedKey()
                     (scanner as? OnePlusBleScannerAndroid)?.sessionHint = store?.load()
-                    Log.i(
-                        OnePlusLogMarkers.TAG,
+                    OnePlusLog.i(
                         "${OnePlusLogMarkers.SESSION}: [$slot] cleared persisted KEKS shared key",
                     )
                 }
@@ -414,7 +462,12 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
      *
      * ⚠️ ASYNC IMPACT: blocks bleExecutor; binder delivers ADV into awaitTarget.
      */
-    private fun prepareConnect(deviceAddress: String, attempt: Int): OnePlusConnectPrep {
+    private fun prepareConnect(
+        deviceAddress: String,
+        attempt: Int,
+        /** Overrides [app.aaps.plugins.dexcomoneplus.oem.OemDeviceProfile.preConnectScanMs]; null keeps the profile value. */
+        scanMsOverride: Long? = null,
+    ): OnePlusConnectPrep {
         val target = deviceAddress.uppercase()
         val sightingAgeMs =
             if (pendingAdvSightingElapsedMs > 0L) {
@@ -423,22 +476,28 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
                 Long.MAX_VALUE
             }
         if (sightingAgeMs in 0..ADV_HANDOFF_FRESH_MS) {
-            Log.i(
-                OnePlusLogMarkers.TAG,
+            OnePlusLog.i(
                 "${OnePlusLogMarkers.SCAN}: [$slot] pre-connect handoff — fresh ADV ${sightingAgeMs}ms old, " +
                     "skip rescan (attempt=$attempt mac=***${target.takeLast(5)})",
             )
             return OnePlusConnectPrep(advFresh = true)
         }
 
-        val scanMs = profile.preConnectScanMs
+        // A long window costs the same single scan registration as a short one but hears the ADV the
+        // moment it arrives, so the persistent wait overrides the profile value here.
+        val scanMs = scanMsOverride ?: profile.preConnectScanMs
         if (scanMs <= 0L) return OnePlusConnectPrep(advFresh = false)
         // UI Connect just selected this ADV → don't hard-fail if re-scan misses briefly.
-        val uiJustSelected = !pendingDeviceName.isNullOrBlank()
+        //
+        // A name alone is not enough. The start screen may pre-select a sensor it has only ever read
+        // from the store, and that entry carries the stored ADV name with no sighting behind it. Such
+        // an entry used to claim "the UI just selected this", which switched off
+        // [OemDeviceProfile.requireAdvBeforeConnect] — the one guard that stops a blind connect. The
+        // timestamp is what separates a real sighting from a remembered name.
+        val uiJustSelected = !pendingDeviceName.isNullOrBlank() && pendingAdvSightingElapsedMs > 0L
         val hardRequireAdv =
             profile.requireAdvBeforeConnect && attempt == 0 && !uiJustSelected
-        Log.i(
-            OnePlusLogMarkers.TAG,
+        OnePlusLog.i(
             "${OnePlusLogMarkers.SCAN}: [$slot] pre-connect awaitTarget ${scanMs}ms attempt=$attempt " +
                 "requireAdv=${profile.requireAdvBeforeConnect} hardRequire=$hardRequireAdv " +
                 "uiJustSelected=$uiJustSelected",
@@ -447,8 +506,7 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
             val wait = scanner.awaitTarget(target, scanMs)
             val hit = wait.target
             if (hit != null) {
-                Log.i(
-                    OnePlusLogMarkers.TAG,
+                OnePlusLog.i(
                     "${OnePlusLogMarkers.SCAN}: [$slot] pre-connect ADV name=${hit.name} " +
                         "rssi=${hit.rssi} mac=***${target.takeLast(5)}",
                 )
@@ -466,8 +524,7 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
                     "ONEPLUS_SCAN: ADV not seen in ${scanMs}ms — defer connect (keep screen on, sensor close)",
                 )
             }
-            Log.w(
-                OnePlusLogMarkers.TAG,
+            OnePlusLog.w(
                 "${OnePlusLogMarkers.SCAN}: [$slot] pre-connect ADV not seen in ${scanMs}ms " +
                     "(attempt=$attempt known MAC uiJustSelected=$uiJustSelected foreign=${foreign ?: "-"})",
             )
@@ -475,7 +532,7 @@ class OnePlusCgmDriverReal(private val storeNamespace: String? = null) : OnePlus
         } catch (t: IllegalStateException) {
             throw t
         } catch (t: Throwable) {
-            Log.w(OnePlusLogMarkers.TAG, "${OnePlusLogMarkers.SCAN}: [$slot] pre-connect ${t.message}")
+            OnePlusLog.w("${OnePlusLogMarkers.SCAN}: [$slot] pre-connect ${t.message}")
             if (hardRequireAdv) {
                 throw IllegalStateException(
                     "ONEPLUS_SCAN: pre-connect failed — ${t.message}",
