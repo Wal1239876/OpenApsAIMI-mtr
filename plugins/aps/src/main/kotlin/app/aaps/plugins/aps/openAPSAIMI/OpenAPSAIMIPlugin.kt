@@ -49,6 +49,7 @@ import app.aaps.core.interfaces.rx.events.EventAPSCalculationFinished
 import app.aaps.core.interfaces.rx.events.EventPreferenceChange
 import app.aaps.core.interfaces.sharedPreferences.SP
 import app.aaps.core.interfaces.stats.TddCalculator
+import app.aaps.core.interfaces.stats.TirCalculator
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.HardLimits
@@ -173,6 +174,7 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
     private val glucoseStatusProvider: GlucoseStatusProvider,
     private val glucoseStatusCalculatorAimi: GlucoseStatusCalculatorAimi,
     private val tddCalculator: TddCalculator,
+    private val tirCalculator: TirCalculator,
     private val bgQualityCheck: BgQualityCheck,
     private val uiInteraction: UiInteraction,
     private val determineBasalaimiSMB2: DetermineBasalaimiSMB2,
@@ -418,6 +420,12 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
 
     /** Instant of the previous stress evaluation, so a gap longer than 10 min breaks continuity. */
     private var stressIsfLastEvalMs: Long? = null
+
+    /** Verdict of the previous stress evaluation, so only an active floor may use its grace time. */
+    private var stressIsfWasActive: Boolean = false
+
+    /** Instant the signature stopped holding while the floor was still on, or null when it holds. */
+    private var stressIsfBreakStartedMs: Long? = null
 
     // ?tat EMA persistant (cl? Prefs ? cr?er si tu veux le garder entre runs)
     private var tddEma: Double? = null
@@ -1478,9 +1486,16 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
                 nowMs = dateUtil.now(),
                 signatureSinceMs = stressIsfSignatureSinceMs,
                 lastEvaluatedMs = stressIsfLastEvalMs,
+                wasActive = stressIsfWasActive,
+                breakStartedMs = stressIsfBreakStartedMs,
+                // The heart rate may not take this protection away during a fast rise — see
+                // [StressIsfFloor.REASON_RISE_HOLD].
+                deltaMgdl5m = gs.delta,
             )
             stressIsfSignatureSinceMs = stressVerdict.signatureSinceMs
             stressIsfLastEvalMs = stressVerdict.lastEvaluatedMs
+            stressIsfWasActive = stressVerdict.active
+            stressIsfBreakStartedMs = stressVerdict.breakStartedMs
             val stressFloorArmed = preferences.get(BooleanKey.OApsAIMIStressIsfFloor)
             val stressFloorMultiplier =
                 if (stressVerdict.active && stressFloorArmed) StressIsfFloor.ARMED_FLOOR_MULTIPLIER
@@ -2028,6 +2043,9 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
                                 rh = rh,
                                 unifiedReactivityLearner = unifiedReactivityLearner,
                                 tddCalculator = tddCalculator,
+                                // Without this the advisor has no glucose source and must stay silent.
+                                tirCalculator = tirCalculator,
+                                aapsLogger = aapsLogger,
                             ).pkpdRecommendationsForSettings(7)
                         }
                     },
@@ -2366,7 +2384,10 @@ open class OpenAPSAIMIPlugin  @Inject constructor(
                 add(BooleanKey.OApsAIMIautodriveAggressiveSmbFloor)
                 add(BooleanKey.OApsAIMIStressIsfFloor)
                 add(BooleanKey.OApsAIMIEffortActivityProtection)
-                add(BooleanKey.OApsAIMIDescentRedoseGuard)
+                add(BooleanKey.OApsAIMIRiseCeilingGuard)
+                add(BooleanKey.OApsAIMIAnticipBasalFloor)
+                add(DoubleKey.OApsAIMIAnticipBudgetU)
+                add(BooleanKey.OApsAIMIAnticipMealEvidence)
                 add(DoubleKey.OApsAIMIautodrivesmallPrebolus)
                 add(DoubleKey.OApsAIMIautodrivePrebolus)
                 add(
