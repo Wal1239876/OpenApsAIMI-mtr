@@ -306,4 +306,63 @@ class BasalDecisionEngineTest {
         assertTrue(reason.contains("AD_EARLY_TBR_BLOCKED")) { reason }
         assertTrue(reason.contains("evBG=")) { reason }
     }
+
+    /** The meal-onset detector gets the real predicted delta when given; the old call passed the delta twice. */
+    @Test
+    fun `forced TBR detector receives the predicted delta, or the delta when none is given`() {
+        var seenPredicted: Float? = null
+        val helpers = BasalDecisionEngine.Helpers(
+            calculateRate = { _, _, mult, _ -> 1.0 * mult },
+            calculateBasalRate = { _, _, mult -> 1.0 * mult },
+            detectMealOnset = { _, predicted, _, _, _ -> seenPredicted = predicted; false },
+            round = { v, _ -> v }
+        )
+        every { basalPlanner.plan(any()) } returns null
+
+        engine.decide(forcedTbrInput(delta = 3.0).copy(predictedDelta = 0.5), RT(algorithm = APSResult.Algorithm.AIMI, runningDynamicIsf = true), helpers)
+        assertEquals(0.5f, seenPredicted!!, 1e-6f)
+
+        engine.decide(forcedTbrInput(delta = 3.0), RT(algorithm = APSResult.Algorithm.AIMI, runningDynamicIsf = true), helpers)
+        assertEquals(3.0f, seenPredicted!!, 1e-6f)
+    }
+
+    // ---- Engine hyper bound (shadow first) ---------------------------------------------------------
+    // "Slow rise" multiplies by combinedDelta and has no bound (199 U/h seen on 2026-10-20). The stub
+    // `calculateBasalRate` returns the multiplier, so the raw rate here is combinedDelta = 15.
+    // Bound = profile 0.8 × interpolateBasal(145) = 0.8 × 3.25 = 2.6.
+
+    private fun slowRiseInput(armed: Boolean) = forcedTbrInput(delta = 15.0)
+        .copy(slopeFromMinDeviation = 1.0, bgAcceleration = 2.0, engineHyperBoundArmed = armed)
+
+    @Test
+    fun `slow rise is exported in shadow and keeps its raw rate when disarmed`() {
+        every { basalPlanner.plan(any()) } returns null
+        val decision = engine.decide(slowRiseInput(armed = false), RT(algorithm = APSResult.Algorithm.AIMI, runningDynamicIsf = true), noMealOnsetHelpers())
+        assertEquals(15.0, decision.rate, 1e-9)
+        val bound = decision.hyperBound
+        assertNotNull(bound)
+        assertEquals(EngineHyperRateBound.Branch.SLOW_RISE, bound!!.branch)
+        assertTrue(bound.wouldBind)
+        assertFalse(bound.applied)
+        assertEquals(2.6, bound.boundUph, 1e-9)
+    }
+
+    @Test
+    fun `slow rise is bound to profile times the glucose factor when armed`() {
+        every { basalPlanner.plan(any()) } returns null
+        val rt = RT(algorithm = APSResult.Algorithm.AIMI, runningDynamicIsf = true)
+        val decision = engine.decide(slowRiseInput(armed = true), rt, noMealOnsetHelpers())
+        assertEquals(2.6, decision.rate, 1e-9)
+        assertTrue(rt.reason.toString().contains("ENGINE_BOUND")) { rt.reason.toString() }
+    }
+
+    /** "Eventual BG>110" at BG 160: the stub gives the factor itself, 4.0, the bound is 0.8 × 4.0 = 3.2. */
+    @Test
+    fun `eventual branch is bound by a single glucose factor when armed`() {
+        every { basalPlanner.plan(any()) } returns null
+        val input = forcedTbrInput(delta = 3.0).copy(bg = 160.0, engineHyperBoundArmed = true)
+        val decision = engine.decide(input, RT(algorithm = APSResult.Algorithm.AIMI, runningDynamicIsf = true), noMealOnsetHelpers())
+        assertEquals(EngineHyperRateBound.Branch.EVENTUAL_BG_110, decision.hyperBound?.branch)
+        assertEquals(3.2, decision.rate, 1e-9)
+    }
 }

@@ -44,10 +44,14 @@ import app.aaps.plugins.aps.openAPSAIMI.activity.EffortActivityBelief
 import app.aaps.plugins.aps.openAPSAIMI.basal.BasalChannelSafetyGuards
 import app.aaps.plugins.aps.openAPSAIMI.basal.BasalDecisionEngine
 import app.aaps.plugins.aps.openAPSAIMI.basal.BasalHistoryUtils
+import app.aaps.plugins.aps.openAPSAIMI.basal.BasalStackTerminalCap
 import app.aaps.plugins.aps.openAPSAIMI.basal.BasalTerminalInvariants
+import app.aaps.plugins.aps.openAPSAIMI.basal.EngineHyperRateBound
+import app.aaps.plugins.aps.openAPSAIMI.basal.TerminalRateGuards
 import app.aaps.plugins.aps.openAPSAIMI.basal.AnticipationBasalFloor
 import app.aaps.plugins.aps.openAPSAIMI.basal.FclMealBasal
 import app.aaps.plugins.aps.openAPSAIMI.basal.DynamicBasalController
+import app.aaps.plugins.aps.openAPSAIMI.basal.DynamicBasalStackCap
 import app.aaps.plugins.aps.openAPSAIMI.basal.T3cAnticipation
 import app.aaps.plugins.aps.openAPSAIMI.basal.T3cAutodriveBasalBridge
 import app.aaps.plugins.aps.openAPSAIMI.basal.T3cTrajectoryContext
@@ -167,6 +171,7 @@ import app.aaps.plugins.aps.openAPSAIMI.physio.EndogenousBasalBridgePolicy
 import app.aaps.plugins.aps.openAPSAIMI.physio.MealAbsorptionMemory
 import app.aaps.plugins.aps.openAPSAIMI.physio.MealAbsorptionPhase
 import app.aaps.plugins.aps.openAPSAIMI.physio.MealAbsorptionPhaseEngine
+import app.aaps.plugins.aps.openAPSAIMI.physio.MealAbsorptionRuntime
 import app.aaps.plugins.aps.openAPSAIMI.physio.PhysiologicalPhaseClassifier
 import app.aaps.plugins.aps.openAPSAIMI.physio.PhysioContextMTR
 import app.aaps.plugins.aps.openAPSAIMI.physio.PhysioLatentState
@@ -775,6 +780,16 @@ internal data class AimiDecisionContext(
         var physiological_patterns: org.json.JSONObject? = null,
         /** Unified meal absorption belief + phase (IOB / HTR / SMB priority) */
         var meal_absorption_phase: MealAbsorptionPhaseExport? = null,
+        /** Meals the person declared with a mode note (FCL, lunch, …): active modes and last declaration. */
+        var declared_meal: org.json.JSONObject? = null,
+        /** Which tick the meal blocks come from: this one, or the previous one on an early exit. */
+        var meal_blocks_origin: org.json.JSONObject? = null,
+        /** DynamicBasalStackCap on the engine PI fallback and on setTempBasal. */
+        var dynamic_basal_stack_cap: org.json.JSONObject? = null,
+        /** EngineHyperRateBound on the engine "Slow rise" / "Eventual BG>110" branches (shadow when off). */
+        var engine_hyper_bound: org.json.JSONObject? = null,
+        /** MealAbsorptionRuntime of the meal-absorption overlay: old runtime vs real episode age. */
+        var meal_absorption_runtime: org.json.JSONObject? = null,
         /** PKPD vs scenario eventual-BG divergence audit (PredictionDivergenceAuditor) */
         var pred_divergence: org.json.JSONObject? = null,
         /** Recursive Belief Tree — full JSON object for AIMI_Decisions.jsonl */
@@ -1277,6 +1292,11 @@ internal data class AimiDecisionContext(
                 mJson.put("physio_score", m.physio_score)
                 adj.put("meal_absorption_phase", mJson)
             }
+            adjustments.declared_meal?.let { adj.put("declared_meal", it) }
+            adjustments.meal_blocks_origin?.let { adj.put("meal_blocks_origin", it) }
+            adjustments.dynamic_basal_stack_cap?.let { adj.put("dynamic_basal_stack_cap", it) }
+            adjustments.engine_hyper_bound?.let { adj.put("engine_hyper_bound", it) }
+            adjustments.meal_absorption_runtime?.let { adj.put("meal_absorption_runtime", it) }
             adjustments.pred_divergence?.let { pd ->
                 adj.put("pred_divergence", pd)
             }
@@ -2427,6 +2447,19 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         lastPhysiologicalPhaseOutput = null
         lastPhysiologicalPatternSnapshot = null
         AimiCascadeArbitrationArtifacts.clear()
+        // Keep the previous tick's meal state for the export only. A tick that leaves early (the prebolus
+        // tick of a meal mode returns before the meal state is computed) would otherwise export no meal
+        // block at all, on exactly the ticks where the meal starts.
+        if (lastMealAbsorptionOutput != null || lastPhysioLatentState != null ||
+            lastUamHypothesisState != null || lastPatientState != null
+        ) {
+            prevTickMealAbsorptionOutput = lastMealAbsorptionOutput
+            prevTickPhysioLatentState = lastPhysioLatentState
+            prevTickUamHypothesisState = lastUamHypothesisState
+            prevTickPatientState = lastPatientState
+            prevTickMealBlocksAtMs = lastTickStartMs
+        }
+        lastTickStartMs = ctx.currentTime
         lastMealAbsorptionOutput = null
         lastPhysioLatentState = null
         lastEffortAssessment = null // per-tick computed; memory (lastEffortMemory) persists across ticks
@@ -2447,6 +2480,12 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         currentTickDecisionEventId = null
         lastAuditorAuditStartedAtMs = 0L
         lastPostHypoDeliveryAuthority = PostHypoDeliveryAuthority.INACTIVE
+        lastPostHypoAuthorityInputs = null
+        lastDynamicStackCapEngine = null
+        lastDynamicStackCapSetTemp = null
+        lastStackTerminalVerdict = null
+        lastEngineHyperBound = null
+        lastMealAbsorptionRuntime = null
         lastPostHypoSmbBeforeCapU = null
         lastPostHypoSmbAfterCapU = null
         // Cross-tick hysteresis (InsulinSlope / Endogenous) must NOT reset here — that zeroed
@@ -3245,6 +3284,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         this.dinnerruntime = therapy.getTimeElapsedSinceLastEvent("dinner")
         this.highCarbrunTime = therapy.getTimeElapsedSinceLastEvent("highcarb")
         this.snackrunTime = therapy.getTimeElapsedSinceLastEvent("snack")
+        // The *runtime fields above stop at 60 min; the PK/PD learning gate needs the whole meal.
+        this.lastDeclaredMeal = therapy.lastDeclaredMeal(ctx.currentTime)
         observeCircadianMealProfile(ctx.currentTime)
         this.iscalibration = therapy.calibrationTime
         this.acceleratingUp = if (delta > 2 && delta - longAvgDelta > 2) 1 else 0
@@ -3847,8 +3888,55 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         )
     }
 
-    private fun mealAbsorptionPhaseExport(): AimiDecisionContext.MealAbsorptionPhaseExport? {
-        val out = lastMealAbsorptionOutput ?: return null
+    /**
+     * The meal modes the person declared, as the loop sees them this tick. Export only.
+     *
+     * Before this block the JSONL had no trace of lunch, dinner, bfast, highcarb, snack, meal or anticip,
+     * and FCL only in the narrative text, so no study could use the most reliable meal signal there is.
+     */
+    private fun stackCapJson(v: DynamicBasalStackCap.Verdict): org.json.JSONObject = org.json.JSONObject().apply {
+        put("would_cap", v.wouldCap)
+        put("applied", v.applied)
+        put("multiplier_in", v.multiplierIn)
+        put("multiplier_out", v.multiplierOut)
+        v.stackDropMgdl?.let { put("stack_drop_mgdl", it) }
+        put("declared_meal_exempt", v.declaredMealExempt)
+    }
+
+    private fun stackTerminalJson(v: BasalStackTerminalCap.Verdict): org.json.JSONObject = org.json.JSONObject().apply {
+        put("would_cap", v.wouldCap)
+        put("applied", v.applied)
+        put("rate_in_uph", v.rateInUph)
+        put("rate_out_uph", v.rateOutUph)
+        v.capUph?.let { put("cap_uph", it) }
+        v.stackDropMgdl?.let { put("stack_drop_mgdl", it) }
+        v.bgMinusFloorMgdl?.let { put("bg_minus_floor_mgdl", it) }
+        put("declared_meal_exempt", v.declaredMealExempt)
+    }
+
+    private fun declaredMealExport(profile: OapsProfileAimi): org.json.JSONObject = org.json.JSONObject().apply {
+        val active = org.json.JSONArray()
+        if (fclTime) active.put("fcl")
+        if (mealTime) active.put("meal")
+        if (bfastTime) active.put("bfast")
+        if (lunchTime) active.put("lunch")
+        if (dinnerTime) active.put("dinner")
+        if (highCarbTime) active.put("highcarb")
+        if (snackTime) active.put("snack")
+        if (anticipTime) active.put("anticip")
+        put("active_modes", active)
+        put("fcl_declared", fclDeclaredThisTick(profile))
+        lastDeclaredMeal?.let { meal ->
+            put("last_keyword", meal.keyword)
+            put("minutes_since_declaration", meal.ageMin)
+            put("high_carb", meal.highCarb)
+        }
+    }
+
+    private fun mealAbsorptionPhaseExport(
+        out: MealAbsorptionPhaseEngine.Output? = lastMealAbsorptionOutput,
+    ): AimiDecisionContext.MealAbsorptionPhaseExport? {
+        if (out == null) return null
         return AimiDecisionContext.MealAbsorptionPhaseExport(
             phase = out.phase.name,
             belief = out.belief,
@@ -4026,6 +4114,13 @@ class DetermineBasalaimiSMB2 @Inject constructor(
         lastPatientState = patientState
         val patientModeDecision = PatientModeOrchestrator.evaluate(patientState)
         lastPatientModeDecision = patientModeDecision
+        // The post-hypo authority must decide on the mode this tick ends with. When the mode changes
+        // after the authority was evaluated, evaluate it again with the same inputs.
+        lastPostHypoAuthorityInputs?.let { (combinedDeltaUsed, hintUsed) ->
+            if (lastPostHypoDeliveryAuthority.patientModeSeen != patientModeDecision.mode) {
+                refreshPostHypoDeliveryAuthority(combinedDelta = combinedDeltaUsed, postHypoHint = hintUsed)
+            }
+        }
         val physioLive = PhysioLiveDigest.from(enrichedSnap, nowMs)
         ensureWCycleInfo()
         val hypoGuardActive =
@@ -5984,6 +6079,18 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                         "floor=${"%.2f".format(v3SmbFloor)} U",
                 )
             }
+            // V3 refreshed meal/physio after the tick-level pre_rbt publish — rebuild MealCertainty
+            // and re-publish gated terminals so RBT stacking + deliver see post-refresh evidence.
+            // Done BEFORE the post-hypo cap: the patient mode can change here, and the cap must use the
+            // mode this tick exports (field report 2026-10-17: 1,713 of 3,446 ticks exported as
+            // POST_HYPO_RECOVERY had an authority that had seen another mode). The refresh re-evaluates
+            // the authority itself when the mode changes.
+            refreshPatientStateRuntime(
+                nowMs = dateUtil.now(),
+                healthSnapshot = snapshot,
+                sourceSensor = ctx.glucoseStatus.sourceSensor,
+                refreshSource = PatientRefreshSource.PHYSIO_SIGNAL,
+            )
             val v3Smb = lastPostHypoDeliveryAuthority.capSmbU(v3SmbRaw)
             lastPostHypoSmbBeforeCapU = v3SmbRaw
             lastPostHypoSmbAfterCapU = v3Smb
@@ -6001,14 +6108,6 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 )
             }
             val cbfShieldDeltaU = adCommand?.scheduledMicroBolus?.takeIf { !v3CommandSafe && it > 0.01 }
-            // V3 refreshed meal/physio after the tick-level pre_rbt publish — rebuild MealCertainty
-            // and re-publish gated terminals so RBT stacking + deliver see post-refresh evidence.
-            refreshPatientStateRuntime(
-                nowMs = dateUtil.now(),
-                healthSnapshot = snapshot,
-                sourceSensor = ctx.glucoseStatus.sourceSensor,
-                refreshSource = PatientRefreshSource.PHYSIO_SIGNAL,
-            )
             val preV3Eventual =
                 this.eventualBG.takeIf { it.isFinite() && it > 1.0 }
                     ?: rT.eventualBG?.takeIf { it.isFinite() && it > 1.0 }
@@ -7782,10 +7881,15 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                         lastMealAbsorptionOutput?.phase == MealAbsorptionPhase.INTER_WAVE ||
                         lastMealAbsorptionOutput?.phase == MealAbsorptionPhase.PEAK_CORRECTION
                     ) -> {
-                val runTime: Int = MealAbsorptionMemory.lastActiveAtMs.takeIf { it > 0L }?.let {
-                    ((dateUtil.now() - it) / 60_000L).toInt().coerceAtLeast(0)
-                } ?: listOf(mealruntime, lunchruntime, dinnerruntime, highCarbrunTime, bfastruntime, snackrunTime)
-                    .maxOrNull()?.toInt() ?: 0
+                val runtime = MealAbsorptionRuntime.resolve(
+                    nowMs = dateUtil.now(),
+                    onsetAtMs = MealAbsorptionMemory.onsetAtMs,
+                    lastActiveAtMs = MealAbsorptionMemory.lastActiveAtMs,
+                    modeRuntimesMin = listOf(mealruntime, lunchruntime, dinnerruntime, highCarbrunTime, bfastruntime, snackrunTime),
+                    useOnset = preferences.get(BooleanKey.OApsAIMIMealAbsorptionOnsetRuntime),
+                )
+                lastMealAbsorptionRuntime = runtime
+                val runTime: Int = runtime.runtimeMin
                 val target = targetBg
                 val rocketStart = delta > 5.0f || bg > targetBg + 40
                 val safeMax = if (rocketStart) profile.max_basal else if (mealModesMaxBasal > 0) mealModesMaxBasal else profileCurrentBasal * 2.0
@@ -7804,7 +7908,7 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                         basal,
                         profileCurrentBasal,
                         boostedRate / profileCurrentBasal,
-                        "Meal absorption ${lastMealAbsorptionOutput?.phase?.name} ($runTime m)",
+                        "Meal absorption ${lastMealAbsorptionOutput?.phase?.name} (${runtime.onsetMin ?: runTime} m)",
                         ctx.currentTemp,
                         rT,
                     )
@@ -8734,6 +8838,12 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             auditorConfidence = auditorConfidence,
             projectionHorizonMin = DynamicBasalController.PROJECTION_HORIZON_MIN
                 .takeIf { preferences.get(BooleanKey.OApsAIMIBasalProjectedError) },
+            predictedDelta = predictedDelta(getRecentDeltas())
+                .takeIf { preferences.get(BooleanKey.OApsAIMIForcedTbrRealPredDelta) && it.isFinite() },
+            dynamicStackCapArmed = preferences.get(BooleanKey.OApsAIMIDynamicBasalStackCap),
+            declaredMealActive = declaredMealWindowActive(),
+            stackCapIsf = stackCapIsf(),
+            engineHyperBoundArmed = preferences.get(BooleanKey.OApsAIMIEngineHyperRateBound),
         )
         val helpers = BasalDecisionEngine.Helpers(
             calculateRate = { basalValue, currentBasalValue, multiplier, label ->
@@ -8747,7 +8857,10 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             },
             round = { value, digits -> round(value, digits) }
         )
-        return basalDecisionEngine.decide(basalInput, bundle.rT, helpers)
+        return basalDecisionEngine.decide(basalInput, bundle.rT, helpers).also { decision ->
+            decision.piStackCap?.let { lastDynamicStackCapEngine = it }
+            decision.hyperBound?.let { lastEngineHyperBound = it }
+        }
     }
 
     /**
@@ -9827,7 +9940,17 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                             }
                             applySmbUnits(finalResult, result.bolusU ?: 0.0, "AiAuditor")
                             if (result.tbrUph != null) {
-                                finalResult.rate = result.tbrUph
+                                // The auditor writes after setTempBasal, so no basal bound saw its rate:
+                                // it may lower the loop rate, never raise it. See TerminalRateGuards.
+                                val loopRate = finalResult.rate
+                                TerminalRateGuards.auditorTbr(loopRate, result.tbrUph)?.let { rate ->
+                                    if (loopRate != null && rate < loopRate) {
+                                        consoleLog.add(sanitizeForJson("🧠 AI Auditor TBR ${"%.2f".format(loopRate)}→${"%.2f".format(rate)} U/h"))
+                                    } else if (loopRate != null && result.tbrUph > loopRate) {
+                                        consoleLog.add(sanitizeForJson("🧠 AI Auditor TBR ${"%.2f".format(result.tbrUph)} refused (above loop ${"%.2f".format(loopRate)} U/h)"))
+                                    }
+                                    finalResult.rate = rate
+                                }
                             }
                             if (result.tbrMin != null) {
                                 finalResult.duration = result.tbrMin
@@ -10098,7 +10221,49 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 decisionCtx.adjustments.physiological_patterns = it
             }
         }
-        decisionCtx.adjustments.meal_absorption_phase = mealAbsorptionPhaseExport()
+        // On an early exit this tick has no meal state yet; export the previous tick's, and say so.
+        val mealBlocksFromThisTick = lastMealAbsorptionOutput != null || lastPhysioLatentState != null
+        val usePreviousMealBlocks = !mealBlocksFromThisTick && prevTickMealBlocksAtMs > 0L
+        decisionCtx.adjustments.meal_absorption_phase = mealAbsorptionPhaseExport(
+            lastMealAbsorptionOutput ?: prevTickMealAbsorptionOutput.takeIf { usePreviousMealBlocks },
+        )
+        decisionCtx.adjustments.meal_blocks_origin = org.json.JSONObject().apply {
+            put("source", if (mealBlocksFromThisTick) "this_tick" else if (usePreviousMealBlocks) "previous_tick" else "none")
+            if (usePreviousMealBlocks) put("age_min", (ctx.currentTime - prevTickMealBlocksAtMs) / 60_000L)
+        }
+        decisionCtx.adjustments.declared_meal = declaredMealExport(profile)
+        decisionCtx.adjustments.dynamic_basal_stack_cap = org.json.JSONObject().apply {
+            put("armed", preferences.get(BooleanKey.OApsAIMIDynamicBasalStackCap))
+            lastDynamicStackCapEngine?.let { put("engine_pi", stackCapJson(it)) }
+            lastDynamicStackCapSetTemp?.let { put("set_temp", stackCapJson(it)) }
+            put("terminal_armed", preferences.get(BooleanKey.OApsAIMIBasalStackTerminalCap))
+            lastStackTerminalVerdict?.let { put("terminal", stackTerminalJson(it)) }
+            // Rate after every writer of this tick, the synchronous Sentinel auditor included. An
+            // external auditor answers later, on its own thread, so its rate is not in this value.
+            put("commanded_rate_uph", finalResult.rate ?: org.json.JSONObject.NULL)
+        }
+        decisionCtx.adjustments.engine_hyper_bound = lastEngineHyperBound?.let { v ->
+            org.json.JSONObject().apply {
+                put("armed", preferences.get(BooleanKey.OApsAIMIEngineHyperRateBound))
+                put("branch", v.branch.name)
+                put("raw_uph", v.rawUph)
+                put("bound_uph", v.boundUph)
+                put("would_bind", v.wouldBind)
+                put("applied", v.applied)
+                put("rate_out_uph", v.rateOutUph)
+            }
+        }
+        decisionCtx.adjustments.meal_absorption_runtime = lastMealAbsorptionRuntime?.let { r ->
+            org.json.JSONObject().apply {
+                put("armed", preferences.get(BooleanKey.OApsAIMIMealAbsorptionOnsetRuntime))
+                put("runtime_used_min", r.runtimeMin)
+                put("runtime_legacy_min", r.legacyMin)
+                put("runtime_onset_min", r.onsetMin ?: org.json.JSONObject.NULL)
+                put("used_onset", r.usedOnset)
+                // The overlay window is 0..120 min: with the real age it would already be closed.
+                put("overlay_would_close", (r.onsetMin ?: 0) > 120)
+            }
+        }
         decisionCtx.adjustments.pred_divergence = lastPredDivergenceExport
         val rbtPrefs = RecursiveBeliefPreferences.from(preferences)
         var harmoniaSmbAuthorityJson: org.json.JSONObject? = null
@@ -10142,9 +10307,12 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             harmoniaSmbAuthority = harmoniaSmbAuthorityJson,
         )
         decisionCtx.adjustments.recursive_authority_gate = lastRecursiveAuthorityGateDecision?.toJsonObject()
-        decisionCtx.adjustments.physio_latent_state = lastPhysioLatentState?.toJsonObject()
-        decisionCtx.adjustments.uam_hypotheses = lastUamHypothesisState?.toJsonObject()
-        decisionCtx.adjustments.patient_state = lastPatientState?.toJsonObject()
+        decisionCtx.adjustments.physio_latent_state =
+            (lastPhysioLatentState ?: prevTickPhysioLatentState.takeIf { usePreviousMealBlocks })?.toJsonObject()
+        decisionCtx.adjustments.uam_hypotheses =
+            (lastUamHypothesisState ?: prevTickUamHypothesisState.takeIf { usePreviousMealBlocks })?.toJsonObject()
+        decisionCtx.adjustments.patient_state =
+            (lastPatientState ?: prevTickPatientState.takeIf { usePreviousMealBlocks })?.toJsonObject()
         decisionCtx.adjustments.patient_mode = lastPatientModeDecision?.toJsonObject()
         decisionCtx.adjustments.endocrine_belief = lastWCycleBelief?.toJsonObject()
         // Refresh cycle phase after WCycle resolve (early physio_context often ran with null wCycle).
@@ -10861,6 +11029,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 // Signal-prep is the one dosing call per tick: it owns both learning and the ISF
                 // slew anchor (isfRateLimitAuthority defaults to allowLearning).
                 allowLearning = true,
+                declaredMealAgeMin = lastDeclaredMeal?.ageMin,
+                declaredMealHighCarb = lastDeclaredMeal?.highCarb == true,
             )
         } catch (e: Exception) {
             consoleError.add("❌ PKPD runtime failed: ${e.message}")
@@ -12097,6 +12267,38 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     private var dinnerruntime: Long = 0
     private var highCarbrunTime: Long = 0
     private var snackrunTime: Long = 0
+
+    /** Last declared meal note within 5 h, for the PK/PD learning gate. Refreshed with the runtimes above. */
+    private var lastDeclaredMeal: Therapy.DeclaredMeal? = null
+
+    // DynamicBasalStackCap verdicts of this tick (engine PI fallback, setTempBasal). Export only.
+    private var lastDynamicStackCapEngine: DynamicBasalStackCap.Verdict? = null
+    private var lastDynamicStackCapSetTemp: DynamicBasalStackCap.Verdict? = null
+    // BasalStackTerminalCap (end of setTempBasal), EngineHyperRateBound and MealAbsorptionRuntime of this tick. Export only.
+    private var lastStackTerminalVerdict: BasalStackTerminalCap.Verdict? = null
+    private var lastEngineHyperBound: EngineHyperRateBound.Verdict? = null
+    private var lastMealAbsorptionRuntime: MealAbsorptionRuntime.Result? = null
+
+    /** A meal is declared now: a meal mode is active, or a meal note is younger than 3 h (4 h high-carb). */
+    private fun declaredMealWindowActive(): Boolean = DynamicBasalStackCap.declaredMealActive(
+        anyMealModeActive = mealTime || bfastTime || lunchTime || dinnerTime || highCarbTime || snackTime ||
+            fclTime || anticipTime,
+        lastDeclaredMealAgeMin = lastDeclaredMeal?.ageMin,
+        lastDeclaredMealHighCarb = lastDeclaredMeal?.highCarb == true,
+    )
+
+    /** ISF for the stack cap: the dose ISF when known, else the variable sensitivity. */
+    private fun stackCapIsf(): Double? =
+        cachedPkpdRuntime?.fusedIsf?.takeIf { it.isFinite() && it > 0.0 }
+            ?: variableSensitivity.toDouble().takeIf { it.isFinite() && it > 0.0 }
+
+    // Previous tick's meal state, export only (see `buildDecisionContextInitRtSosAndFlatShadow`).
+    private var prevTickMealAbsorptionOutput: MealAbsorptionPhaseEngine.Output? = null
+    private var prevTickPhysioLatentState: PhysioLatentState? = null
+    private var prevTickUamHypothesisState: UamHypothesisState? = null
+    private var prevTickPatientState: PatientStateSnapshot? = null
+    private var prevTickMealBlocksAtMs: Long = 0L
+    private var lastTickStartMs: Long = 0L
     private var intervalsmb = 1
     private var peakintermediaire = 0.0
     private var latestAdjustedDia: Double = 0.0 // Captured for logging
@@ -12197,6 +12399,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     }
 
     private var correctionAggressionDecision: CorrectionAggressionGate.Decision? = null
+    /** Inputs of this tick's last post-hypo authority evaluation, to re-evaluate it when the mode changes. */
+    private var lastPostHypoAuthorityInputs: Pair<Float, CorrectionAggressionGate.PostHypoHint>? = null
+
     private var lastPostHypoDeliveryAuthority: PostHypoDeliveryAuthority.Decision =
         PostHypoDeliveryAuthority.INACTIVE
 
@@ -13404,11 +13609,13 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             cob = cob.toDouble(),
             postHypoHint = postHypoHint,
         )
+        lastPostHypoAuthorityInputs = combinedDelta to postHypoHint
         lastPostHypoDeliveryAuthority = PostHypoDeliveryAuthority.evaluate(
             PostHypoDeliveryAuthority.Input(
                 gate = correctionAggressionDecision,
                 patientMode = lastPatientModeDecision?.mode,
                 aggressionInput = aggressionInput,
+                declaredMealNote = fclTime || anticipTime,
             ),
         )
         if (lastPostHypoDeliveryAuthority.active) {
@@ -13881,7 +14088,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                     return rT
                 }
                 isMealMode && bg > hypoGuard -> {
-                    val rate = requestedRate.coerceAtLeast(0.0)
+                    val rate = TerminalRateGuards.forceExactCeiling(
+                        requestedRate, profile.max_basal, preferences.get(DoubleKey.meal_modes_MaxBasal),
+                    )
                     rT.reason.append(
                         context.getString(
                             R.string.manual_basal_override,
@@ -13952,7 +14161,9 @@ class DetermineBasalaimiSMB2 @Inject constructor(
 
         // 1) Mode manuel : on pose exactement la valeur demandée (toujours bornée ≥ 0)
         if (forceExact) {
-            val rate = requestedRate.coerceAtLeast(0.0)
+            val rate = TerminalRateGuards.forceExactCeiling(
+                requestedRate, profile.max_basal, preferences.get(DoubleKey.meal_modes_MaxBasal),
+            )
             rT.reason.append(
                 context.getString(
                     R.string.manual_basal_override,
@@ -14002,6 +14213,24 @@ class DetermineBasalaimiSMB2 @Inject constructor(
                 .takeIf { preferences.get(BooleanKey.OApsAIMIBasalProjectedError) },
         )
         var rateAdjustment = dynamicState.finalRate.coerceAtLeast(0.0)
+        // Same rule as the engine's PI fallback: no up-multiplier while the stack can reach 70 on its own,
+        // never during a declared meal. See DynamicBasalStackCap.
+        val setTempStackCap = DynamicBasalStackCap.evaluate(
+            multiplier = dynamicState.sigmoidMultiplier,
+            bgMgdl = bgNow,
+            iobU = iob.toDouble(),
+            isfMgdlPerU = stackCapIsf(),
+            declaredMealActive = declaredMealWindowActive(),
+            armed = preferences.get(BooleanKey.OApsAIMIDynamicBasalStackCap),
+        )
+        lastDynamicStackCapSetTemp = setTempStackCap
+        if (setTempStackCap.applied) {
+            rateAdjustment = requestedRate.coerceAtLeast(0.0)
+            consoleLog.add(
+                "DYNAMIC_BASAL STACK_CAP Mult=${"%.2f".format(setTempStackCap.multiplierIn)}x→1.00x " +
+                    "IOB×ISF=${"%.0f".format(setTempStackCap.stackDropMgdl ?: 0.0)} ≥ BG−70",
+            )
+        }
         
         // Log the math for debugging and transparency
         consoleLog.add(
@@ -14190,6 +14419,28 @@ class DetermineBasalaimiSMB2 @Inject constructor(
             rT.reason.append(" [BASAL_TERMINAL:${terminal.boundBy} ${"%.2f".format(rate)}→${"%.2f".format(terminal.rateUph)}U/h]")
         }
         rate = terminal.rateUph
+
+        // Same stack rule as the multiplier cap above, on the rate itself. Shadow unless armed: the
+        // verdict is exported on every tick, see BasalStackTerminalCap for why it is off by default.
+        // Same IOB and ISF as setTempStackCap, so both verdicts agree.
+        val stackTerminal = BasalStackTerminalCap.evaluate(
+            rateUph = rate,
+            profileBasalUph = profile.current_basal,
+            bgMgdl = bgNow,
+            iobU = iob.toDouble(),
+            isfMgdlPerU = stackCapIsf(),
+            declaredMealActive = declaredMealWindowActive(),
+            armed = preferences.get(BooleanKey.OApsAIMIBasalStackTerminalCap),
+        )
+        lastStackTerminalVerdict = stackTerminal
+        if (stackTerminal.applied) {
+            consoleLog.add(
+                "🔒 STACK_CAP_TERMINAL ${"%.2f".format(stackTerminal.rateInUph)}→${"%.2f".format(stackTerminal.rateOutUph)}U/h " +
+                    "IOB×ISF=${"%.0f".format(stackTerminal.stackDropMgdl ?: 0.0)} ≥ BG−70",
+            )
+            rT.reason.append(" [STACK_CAP_TERMINAL ${"%.2f".format(stackTerminal.rateInUph)}→${"%.2f".format(stackTerminal.rateOutUph)}U/h]")
+            rate = stackTerminal.rateOutUph
+        }
 
         rT.reason.append(context.getString(R.string.temp_basal_pose, "%.2f".format(rate), duration))
         rT.duration = duration
@@ -15948,7 +16199,8 @@ class DetermineBasalaimiSMB2 @Inject constructor(
     )
 
     private fun isMealContextActive(mealData: MealData): Boolean {
-        val manualFlags = mealTime || bfastTime || lunchTime || dinnerTime || highCarbTime || snackTime
+        // fclTime: an FCL meal is declared without carbs, so cobActive cannot see it either.
+        val manualFlags = mealTime || bfastTime || lunchTime || dinnerTime || highCarbTime || snackTime || fclTime
         val cobActive = mealData.mealCOB > 5.0
         return manualFlags || cobActive
     }

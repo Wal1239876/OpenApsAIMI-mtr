@@ -705,6 +705,43 @@ enum class BooleanKey(
         titleResId = R.string.pref_title_aimi_basal_projected_error,
         summaryResId = R.string.pref_summary_aimi_basal_projected_error,
     ),
+    /** 🩸 Dynamic basal: no up-multiplier (held at ×1.0) when IOB × ISF ≥ BG − 70, never during a declared meal.
+     *  Field data 2026-09-01..10-15: multiplier > ×1.05 with that stack → 23 % lows within 3 h vs 3 %.
+     *  ON by default; exported in `dynamic_basal_stack_cap`. See `DynamicBasalStackCap`. */
+    OApsAIMIDynamicBasalStackCap(
+        "key_aimi_dynamic_basal_stack_cap", true,
+        titleResId = R.string.pref_title_aimi_dynamic_basal_stack_cap,
+        summaryResId = R.string.pref_summary_aimi_dynamic_basal_stack_cap,
+    ),
+    /** 🩸 Forced early-meal TBR: give the meal-onset detector a real predicted delta instead of the same
+     *  5-min delta twice, so one noisy step cannot trigger it alone. Undeclared meals only. ON by default. */
+    OApsAIMIForcedTbrRealPredDelta(
+        "key_aimi_forced_tbr_real_pred_delta", true,
+        titleResId = R.string.pref_title_aimi_forced_tbr_real_pred_delta,
+        summaryResId = R.string.pref_summary_aimi_forced_tbr_real_pred_delta,
+    ),
+    /** 🩸 Same stack rule as [OApsAIMIDynamicBasalStackCap], on the final rate at the end of setTempBasal:
+     *  back to the profile basal when IOB × ISF ≥ BG − 70, outside a declared meal. OFF by default (shadow):
+     *  on 2026-09-02..10-20 it marks risk (lows 28 % vs 13 %) but does not discriminate (1.34). See `BasalStackTerminalCap`. */
+    OApsAIMIBasalStackTerminalCap(
+        "key_aimi_basal_stack_terminal_cap", false,
+        titleResId = R.string.pref_title_aimi_basal_stack_terminal_cap,
+        summaryResId = R.string.pref_summary_aimi_basal_stack_terminal_cap,
+    ),
+    /** 🍽️ Meal-absorption overlay: count its runtime from the episode start, not from the last tick (always 0).
+     *  OFF by default: the episode rarely closes today, so this alone would remove most overlays. See `MealAbsorptionRuntime`. */
+    OApsAIMIMealAbsorptionOnsetRuntime(
+        "key_aimi_meal_absorption_onset_runtime", false,
+        titleResId = R.string.pref_title_aimi_meal_absorption_onset_runtime,
+        summaryResId = R.string.pref_summary_aimi_meal_absorption_onset_runtime,
+    ),
+    /** 🩸 Engine "Slow rise" / "Eventual BG>110": bound to profile × one glucose factor (0.5–5). OFF by default (shadow).
+     *  See `EngineHyperRateBound`. */
+    OApsAIMIEngineHyperRateBound(
+        "key_aimi_engine_hyper_rate_bound", false,
+        titleResId = R.string.pref_title_aimi_engine_hyper_rate_bound,
+        summaryResId = R.string.pref_summary_aimi_engine_hyper_rate_bound,
+    ),
     OApsAIMIBasalTerminalInvariants(
         "key_aimi_basal_terminal_invariants", true,
         titleResId = R.string.pref_title_aimi_basal_terminal_invariants,
