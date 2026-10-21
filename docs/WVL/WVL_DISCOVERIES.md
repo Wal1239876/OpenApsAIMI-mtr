@@ -1256,6 +1256,32 @@ Meal modes are explicit user actions such as:
 
 The Meal Advisor docs show that meal handling is a deliberate process rather than an accidental injection path.
 
+## `meal` modes, `anticip`, and `fcl`
+
+These are different ways to tell AIMI about a meal; they are not interchangeable.
+
+- **Meal modes** such as breakfast, lunch, dinner, snack, high-carb, and generic meal have separate
+  settings for some behavior, including prebolus amounts and intervals. Choose the mode that matches
+  the meal category.
+- **`anticip`** is one general meal declaration, not a separate breakfast/lunch/dinner profile. The
+  note lasts for its own duration and does not use the regular meal-mode prebolus. An optional basal
+  floor can be enabled separately; it is off by default, uses a shared insulin budget (default 2 U)
+  over 30 minutes, and stands down below about 4.4 mmol/L or during a fall of about 0.17 mmol/L or
+  more per 5 minutes.
+  Settings: **AAPS Settings → OpenAPS AIMI → AIMI Lab → Autodrive**. There you can find **Help a meal
+  you have declared**, its **Declared meal budget**, and the separate **Treat a declared meal as meal
+  evidence** setting. Both switches are off by default.
+- **`fcl`** needs a recent `fcl` note and a low temporary target (about 4.7 mmol/L or less); a sport note
+  prevents activation, and ending the temporary target ends the mode. It can request the configured
+  meal basal ceiling, subject to other limits. In addition, the current loop has a separate one-shot
+  prebolus path during the first few minutes, using the Autodrive prebolus setting. So FCL is not a
+  no-prebolus alternative.
+
+In short: meal modes allow more tailoring by meal category; `anticip` is a general declaration with
+optional, separately enabled behavior; and FCL has more activation conditions and includes a
+one-shot prebolus in the current implementation. All three can change insulin delivery, so this is a
+description of the code, not a recommendation to change a treatment plan.
+
 # 7. PKPD and absorption behavior
 
 PKPD is a core part of AIMI safety.
