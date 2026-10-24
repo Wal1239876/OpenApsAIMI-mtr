@@ -83,7 +83,8 @@ class GarminPlugin @Inject constructor(
 
         /** Keywords accepted from Garmin /mode (must match therapy.kt detection). */
         private val ALLOWED_THERAPY_MODES = setOf(
-            "bfast", "lunch", "dinner", "highcarb", "fcl", "sport", "stop", "meal", "snack"
+            "bfast", "lunch", "dinner", "highcarb", "coffee", "cafe", "fcl", "sport",
+            "stop", "meal", "snack"
         )
 
         private val DEFAULT_MODE_DURATIONS_MIN = mapOf(
@@ -91,6 +92,9 @@ class GarminPlugin @Inject constructor(
             "lunch" to 60,
             "dinner" to 60,
             "highcarb" to 90,
+            // CoffeeRiseMode.DEFAULT_WINDOW_MIN
+            "coffee" to 90,
+            "cafe" to 90,
             "fcl" to 30,
             "sport" to 120,
             "meal" to 60,
@@ -863,6 +867,20 @@ class GarminPlugin @Inject constructor(
                 loopHub.temporaryBasalRemainingMinutes?.takeIf { it > 0 }?.let {
                     jo.addProperty("tbrMins", it)
                 }
+                // Millimétré: 3h basal staircase + SMB tick timestamps
+                val basalArr = JsonArray()
+                for (step in loopHub.temporaryBasalHistory()) {
+                    val s = JsonObject()
+                    s.addProperty("t", step.t)
+                    s.addProperty("p", step.p)
+                    basalArr.add(s)
+                }
+                jo.add("basalHistory", basalArr)
+                val smbArr = JsonArray()
+                for (ts in loopHub.smbHistoryTimestamps()) {
+                    smbArr.add(ts)
+                }
+                jo.add("smbHistory", smbArr)
             }
             joa.add(jo)
         }
